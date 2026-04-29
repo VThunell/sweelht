@@ -1,0 +1,63 @@
+---
+title: "Import and prepare eel data"
+author: "Viktor Thunell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format:
+  html:
+    embed-resources: true
+    fig-width: 8
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+## Introduction 
+
+
+## Load libraries
+  
+```{r libs}
+#| message: false
+
+pkgs <- c("tidyverse", "devtools", "purrr", "patchwork","DBI","odbc")
+
+
+if(length(setdiff(pkgs, rownames(installed.packages()))) > 0){
+  install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+}
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# # Source code for map plots
+# devtools::source_url("https://raw.githubusercontent.com/VThunell/Lammska_cod-fr/main/R/functions/map-plot.R")
+
+options(ggplot2.continuous.colour = "viridis")
+
+# Set path
+home <- here::here()
+
+```
+
+```{r}
+# Connect to SLU-server:
+ 
+AQ_con <- dbConnect(odbc(),
+                    Driver = "SQL Server",
+                    Server = "aquadw_prod.db.slu.se",
+                    USER = "vitl0001",                           ## Change to your own user-name.
+                    Database = "AquaDW_prod",
+                    Trusted_Connection = "True",
+                   encoding = "utf-8")
+ 
+# Extract the table with all individual eel data.
+ 
+All_eels_ KUL<-dbGetQuery(AQ_con,"select * from AquaDW_prod.mart.KUL_INDIVID_NEW where Art = 'Ål'")
+ 
+!!!! Make a note of the date of export and save a copy with the date in the name for publication !!!!
+```
+
