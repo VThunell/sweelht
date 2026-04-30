@@ -24,7 +24,7 @@ execute:
 ```{r libs}
 #| message: false
 
-pkgs <- c("tidyverse", "devtools", "purrr", "patchwork","DBI","odbc")
+pkgs <- c("tidyverse", "devtools", "purrr", "patchwork","DBI","odbc","arrow","sf","sdmTMB")
 
 
 if(length(setdiff(pkgs, rownames(installed.packages()))) > 0){
@@ -34,7 +34,7 @@ if(length(setdiff(pkgs, rownames(installed.packages()))) > 0){
 invisible(lapply(pkgs, library, character.only = T))
 
 # # Source code for map plots
-# devtools::source_url("https://raw.githubusercontent.com/VThunell/Lammska_cod-fr/main/R/functions/map-plot.R")
+devtools::source_url("https://raw.githubusercontent.com/VThunell/diasp-lht/main/R/functions/map-plot.R") # message of SHA-1 hash for file
 
 options(ggplot2.continuous.colour = "viridis")
 
@@ -42,22 +42,164 @@ options(ggplot2.continuous.colour = "viridis")
 home <- here::here()
 
 ```
+## Get data
+
+### Sötebasen
+
+```{r}
+sb_ind <- read.delim("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/ÅlindividerSötebasen.csv", sep=";", dec=",", fileEncoding="Latin1")
+
+colnames(sb_ind) 
+
+sb_ind2 <- sb_ind %>%
+  filter(!(is.na(Längd1) & is.na(Längd2) & is.na(Vikt2) & is.na(Vikt2) & Åldersprov == "Nej")) %>%
+  rename(length1 = Längd1,
+         length2 = Längd2,
+         weight1 = Vikt1,
+         weight2 = Vikt2,
+         age = Ålder,
+         sex = Kön,
+         stage = Stadium
+         ) %>%
+  # These uses "." as dec
+  mutate(across(c(WGS84_E_Vatten, WGS84_N_Vatten, WGS84_N_Plats, WGS84_E_Plats), readr::parse_number),
+         # when Plats coords are missing, we use the Vatten name. ~800 eels lacks coords
+         lon = if_else(is.na(WGS84_E_Plats), WGS84_E_Vatten, WGS84_E_Plats),
+         lat = if_else(is.na(WGS84_N_Plats), WGS84_N_Vatten, WGS84_N_Plats),
+         db = "sb"
+         )
+  
+sb_ind2 %>% 
+  distinct()
+  
+```
+
+### KUL
 
 ```{r}
 # Connect to SLU-server:
- 
 AQ_con <- dbConnect(odbc(),
                     Driver = "SQL Server",
                     Server = "aquadw_prod.db.slu.se",
-                    USER = "vitl0001",                           ## Change to your own user-name.
+                    USER = "vitl0001",
                     Database = "AquaDW_prod",
                     Trusted_Connection = "True",
                    encoding = "utf-8")
  
 # Extract the table with all individual eel data.
  
-All_eels_ KUL<-dbGetQuery(AQ_con,"select * from AquaDW_prod.mart.KUL_INDIVID_NEW where Art = 'Ål'")
+KUL <- dbGetQuery(AQ_con,"select * from AquaDW_prod.mart.KUL_INDIVID_NEW where Art = 'Ål'")
  
-!!!! Make a note of the date of export and save a copy with the date in the name for publication !!!!
+#!!!! Make a note of the date of export and save a copy with the date in the name for publication !!!!
+```
+<!-- Error in `dbConnect()`: -->
+<!-- ! ODBC failed with error 00000 from [unixODBC][Driver Manager]. -->
+<!-- ✖ Can't open lib 'SQL Server' : file not found -->
+<!-- ℹ From nanodbc/nanodbc.cpp:1184. -->
+<!-- Run `rlang::last_trace()` to see where the error occurred. -->
+
+## Join data
+```{r}
+df <- sb_ind2
 ```
 
+## Retrieve spatial basin info 
+
+```{r}
+# make data spatial object
+df_sf <- st_as_sf(df %>% drop_na(lat,lon), coords = c("lon", "lat"), crs = 4326,  remove = FALSE)
+
+ca <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/catchments/", format = "parquet")
+
+ca_sf <- ca %>%
+  collect() %>%
+  mutate(geometry = st_as_sfc(shape, EWKB = TRUE, crs = 4326)) %>%
+  st_as_sf(sf_column_name = "geometry") %>%
+  select(main_bas) %>%
+  group_by(main_bas) %>%
+  summarise(groups = "drop")
+  # summarise(geometry = st_union(shape_area) ) %>%
+  # ungroup()
+  
+df_ca <- df_sf %>%
+  st_join(ca_sf, join = st_nearest_feature, left = T) 
+
+```
+
+## Data points in space and catchments
+
+```{r}
+plot_map_Nord +
+  geom_sf(data = ca_sf, aes(color = factor(main_bas)), linewidth = 0.1, alpha = 0.1) +
+  geom_sf(data = ca_sf, color = "lightblue", linewidth = 0.1, alpha = 0.1) +
+  geom_point(data = df_ca %>% drop_na(lat,lon) %>% add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000), size = 0.3, color = "#440154FF") 
+ #color = db # color on database.
+```
+
+## Plot silver data
+```{r}
+sb_ind2 %>%
+  #mutate(sex = ifelse(sex == 1, "m","f")) %>%
+  ggplot(aes(age, length1, color = factor(sex)), alpha = 0.3) +
+  geom_point(size = 0.1) +
+  facet_wrap(~stage) +
+#  scale_x_continuous(breaks = seq(0, 13, 1) ) +
+  theme_minimal()  
+
+data.biph %>%
+  ggplot() +
+  geom_density(aes(x = tot.age, color = basin, fill = sex), alpha = 0.3) +
+  xlim(0, 13) +
+
+data.biph %>% 
+  ggplot() + 
+  geom_density(aes(x = length_mm, color = basin, fill = sex), alpha = 0.3)
+
+data.biph %>% 
+  mutate(sex = ifelse(sex == 1, "m","f")) %>%
+  ggplot() +
+  geom_density(aes(x = length_mm, fill = factor(sex)), alpha = 0.5) +
+  facet_wrap(~tot.age, scales = "free_y") +
+  labs(caption = "length density by age") 
+
+# age at smoltification by spatial unit
+data.biph %>%
+  mutate(sex = ifelse(sex == 1, "m","f")) %>%
+  filter(age.type == "both") %>%
+  ggplot() +
+  geom_density(aes(x = juv.age, fill = factor(sex)),  alpha = 0.3) +
+  facet_wrap(~spat.unit) +
+  labs(x = "age at smoltification") 
+  xlim(-1, 5)
+
+# juvenile size at age
+data.biph %>%
+  filter(age.type == "juve.only",
+         #spat.unit == "Upper-Normandy"
+         ) %>%
+  ggplot(aes(x = juv.age, y =length_mm)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "gam", formula = y ~ s(x, k = 3)) +
+  #geom_smooth(method = lm) +
+  facet_wrap(~spat.unit)
+  
+data.biph %>%
+  filter(!age.type == "sea.only",
+         #spat.unit == "Brittany"
+         ) %>%
+  ggplot(aes(x = tot.age, y =length_mm, color = age.type)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "gam", formula = y ~ s(x, k = 3)) +
+  scale_x_continuous(breaks = seq(0, 13, 1), limit = c(0,NA) ) +
+  #geom_smooth(method = lm) +
+  facet_wrap(~spat.unit)
+
+data.biph %>%
+  #filter(age.type == "both") %>%
+  mutate(sex = ifelse(sex == 1, "m","f")) %>%
+  ggplot(aes(tot.age, length_mm, color = factor(smo_age))) +
+  geom_point(alpha = 0.3, size = 0.5) +
+  facet_wrap(~spat.unit) +
+  scale_x_continuous(breaks = seq(0, 13, 1), limit = c(0,NA) ) +
+  theme_minimal()
+```
