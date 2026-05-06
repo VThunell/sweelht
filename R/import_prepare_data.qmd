@@ -24,7 +24,7 @@ execute:
 ```{r libs}
 #| message: false
 
-pkgs <- c("tidyverse", "devtools", "purrr", "patchwork","DBI","odbc","arrow","sf","sdmTMB")
+pkgs <- c("tidyverse", "devtools", "purrr","janitor","patchwork","DBI","odbc","arrow","sf","sdmTMB")
 
 
 if(length(setdiff(pkgs, rownames(installed.packages()))) > 0){
@@ -66,7 +66,8 @@ sb_ind2 <- sb_ind %>%
          # when Plats coords are missing, we use the Vatten name. ~800 eels lacks coords
          lon = if_else(is.na(WGS84_E_Plats), WGS84_E_Vatten, WGS84_E_Plats),
          lat = if_else(is.na(WGS84_N_Plats), WGS84_N_Vatten, WGS84_N_Plats),
-         db = "sb"
+         db = "sb",
+         year = if_else(Årtal1 == Årtal2, Årtal1, year(as_date(FångstDatum)))
          )
   
 sb_ind2 %>% 
@@ -78,19 +79,37 @@ sb_ind2 %>%
 
 ```{r}
 # Connect to SLU-server:
-AQ_con <- dbConnect(odbc(),
-                    Driver = "SQL Server",
-                    Server = "aquadw_prod.db.slu.se",
-                    USER = "vitl0001",
-                    Database = "AquaDW_prod",
-                    Trusted_Connection = "True",
-                   encoding = "utf-8")
- 
-# Extract the table with all individual eel data.
- 
-KUL <- dbGetQuery(AQ_con,"select * from AquaDW_prod.mart.KUL_INDIVID_NEW where Art = 'Ål'")
- 
-#!!!! Make a note of the date of export and save a copy with the date in the name for publication !!!!
+# AQ_con <- dbConnect(odbc(),
+#                     Driver = "ODBC Driver 18 for SQL Server",
+#                     Server = "aquadw_prod.db.slu.se",
+#                     USER = "vitl0001", # set you name
+#                     Database = "AquaDW_prod",
+#                     Trusted_Connection = "yes",
+#                     Encrypt = "no",
+#                     encoding = "utf-8")
+#  
+# # Extract the table with all individual eel data.
+#  
+# KUL <- dbGetQuery(AQ_con,"select * from AquaDW_prod.mart.KUL_INDIVID_NEW where Art = 'Ål'")
+# saveRDS(KUL, file = paste0( "/Users/vitl0001/Documents/Projects/SWEel-lhts/data/KUL_",Sys.Date(),".RData"))
+kul_ind <- readRDS("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/KUL_2026-05-04.RData")
+
+colnames(kul_ind)
+
+kul_ind2 <- kul_ind %>% 
+  #filter(!(is.na(Längd1) & is.na(Längd2) & is.na(Vikt2) & is.na(Vikt2) & Åldersprov == "Nej"))
+  rename(length1 = Slutlängd_mm,
+         weight1 = Totalvikt_gram,
+         #  weight2 = Vikt2,
+         age = Ålder,
+         sex = Kön,
+         stage = Artbestämning,
+         year = Fiskeår
+         ) %>%
+  mutate(lon = Bäst_longitud_decimal_grader,
+         lat = Bäst_latitud_decimal_grader,
+         db = "kul")
+
 ```
 <!-- Error in `dbConnect()`: -->
 <!-- ! ODBC failed with error 00000 from [unixODBC][Driver Manager]. -->
@@ -100,7 +119,20 @@ KUL <- dbGetQuery(AQ_con,"select * from AquaDW_prod.mart.KUL_INDIVID_NEW where A
 
 ## Join data
 ```{r}
-df <- sb_ind2
+ # can there be dupes between the dbs?
+dupes <- c(kul_ind$Ind_id,sb_ind2$IndividID)[duplicated(c(kul_ind$Ind_id,sb_ind2$IndividID))]
+
+kul_ind2 %>%
+  filter(Ind_id %in% dupes) %>% select(length1, age,db) %>% bind_cols(sb_ind2 %>% filter(IndividID %in% dupes) %>% select(length1,age,db))  # likely not
+
+# join them
+#cols <- c("length1","length2","weight1","weight2","age","lat","lon","sex","stage","db","year")
+cols <- c("length1","weight1","age","lat","lon","sex","stage","db","year")
+df <- sb_ind2 %>% 
+  select(all_of(cols)) %>% 
+  bind_rows(kul_ind2 %>% 
+              select(all_of(cols)))
+
 ```
 
 ## Retrieve spatial basin info 
@@ -110,96 +142,107 @@ df <- sb_ind2
 df_sf <- st_as_sf(df %>% drop_na(lat,lon), coords = c("lon", "lat"), crs = 4326,  remove = FALSE)
 
 ca <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/catchments/", format = "parquet")
+re <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/refeel/", format = "parquet")
 
+# catchments (basins)
 ca_sf <- ca %>%
   collect() %>%
-  mutate(geometry = st_as_sfc(shape, EWKB = TRUE, crs = 4326)) %>%
+  mutate(geometry = st_as_sfc(shape, EWKB = TRUE, crs = 4326),
+         main_bas = main_bas) %>%
   st_as_sf(sf_column_name = "geometry") %>%
   select(main_bas) %>%
   group_by(main_bas) %>%
-  summarise(groups = "drop")
-  # summarise(geometry = st_union(shape_area) ) %>%
-  # ungroup()
-  
-df_ca <- df_sf %>%
-  st_join(ca_sf, join = st_nearest_feature, left = T) 
+  summarise() %>%
+  ungroup()
 
+# refeel countries
+co_sf <- re %>%
+  collect() %>%
+  filter(are_lev_code %in% "Country") %>%
+  mutate(geometry = st_as_sfc(geom_polygon), crs = 4326) %>%
+  st_as_sf(sf_column_name = "geometry", crs = 4326) 
+
+# add in spatial info and remove geometry
+df_ca <- ca_sf %>%
+  st_join(df_sf,left = FALSE)
+  
+df_caco <- df_ca %>%
+  st_join(co_sf %>% select(are_code)) %>%
+  rename(country = are_code) %>% st_drop_geometry()
+
+# select the basins with data
+ca_sf2 <- ca_sf %>%
+  filter(main_bas %in% df_caco$main_bas)
 ```
 
 ## Data points in space and catchments
 
 ```{r}
-plot_map_Nord +
-  geom_sf(data = ca_sf, aes(color = factor(main_bas)), linewidth = 0.1, alpha = 0.1) +
-  geom_sf(data = ca_sf, color = "lightblue", linewidth = 0.1, alpha = 0.1) +
-  geom_point(data = df_ca %>% drop_na(lat,lon) %>% add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000), size = 0.3, color = "#440154FF") 
- #color = db # color on database.
+swe_mbs <- df_caco %>% filter(country == "SE") %>% distinct(main_bas) %>% pull(main_bas)
+#plot_map_Euro + # one point in Italy
+plot_map_Nord + 
+  geom_sf(data = ca_sf2 %>% filter(main_bas %in% swe_mbs), aes(fill = factor(main_bas)), color = NA,  alpha = 0.3)  +
+  geom_point(data = df_caco %>% filter(country == "SE") %>% 
+               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = db), size = 0.1) 
+  # scale_fill_viridis_d() +
+  # scale_color_viridis_d()
+
 ```
 
 ## Plot silver data
 ```{r}
-sb_ind2 %>%
+df_caco %>%
   #mutate(sex = ifelse(sex == 1, "m","f")) %>%
-  ggplot(aes(age, length1, color = factor(sex)), alpha = 0.3) +
-  geom_point(size = 0.1) +
+  ggplot(aes(age, length1, color = factor(sex))) +
+  geom_point(size = 0.1, alpha = 0.3) +
   facet_wrap(~stage) +
-#  scale_x_continuous(breaks = seq(0, 13, 1) ) +
   theme_minimal()  
 
-data.biph %>%
-  ggplot() +
-  geom_density(aes(x = tot.age, color = basin, fill = sex), alpha = 0.3) +
-  xlim(0, 13) +
-
-data.biph %>% 
-  ggplot() + 
-  geom_density(aes(x = length_mm, color = basin, fill = sex), alpha = 0.3)
-
-data.biph %>% 
-  mutate(sex = ifelse(sex == 1, "m","f")) %>%
-  ggplot() +
-  geom_density(aes(x = length_mm, fill = factor(sex)), alpha = 0.5) +
-  facet_wrap(~tot.age, scales = "free_y") +
-  labs(caption = "length density by age") 
-
-# age at smoltification by spatial unit
-data.biph %>%
-  mutate(sex = ifelse(sex == 1, "m","f")) %>%
-  filter(age.type == "both") %>%
-  ggplot() +
-  geom_density(aes(x = juv.age, fill = factor(sex)),  alpha = 0.3) +
-  facet_wrap(~spat.unit) +
-  labs(x = "age at smoltification") 
-  xlim(-1, 5)
-
-# juvenile size at age
-data.biph %>%
-  filter(age.type == "juve.only",
-         #spat.unit == "Upper-Normandy"
-         ) %>%
-  ggplot(aes(x = juv.age, y =length_mm)) +
-  geom_point(alpha = 0.3) +
-  geom_smooth(method = "gam", formula = y ~ s(x, k = 3)) +
-  #geom_smooth(method = lm) +
-  facet_wrap(~spat.unit)
-  
-data.biph %>%
-  filter(!age.type == "sea.only",
-         #spat.unit == "Brittany"
-         ) %>%
-  ggplot(aes(x = tot.age, y =length_mm, color = age.type)) +
-  geom_point(alpha = 0.3) +
-  geom_smooth(method = "gam", formula = y ~ s(x, k = 3)) +
-  scale_x_continuous(breaks = seq(0, 13, 1), limit = c(0,NA) ) +
-  #geom_smooth(method = lm) +
-  facet_wrap(~spat.unit)
-
-data.biph %>%
-  #filter(age.type == "both") %>%
-  mutate(sex = ifelse(sex == 1, "m","f")) %>%
-  ggplot(aes(tot.age, length_mm, color = factor(smo_age))) +
-  geom_point(alpha = 0.3, size = 0.5) +
-  facet_wrap(~spat.unit) +
-  scale_x_continuous(breaks = seq(0, 13, 1), limit = c(0,NA) ) +
+# silver length variation
+df_caco %>%
+  filter(stage == "Blankål") %>%
+  drop_na(length1) %>%
+  #summarise(ml = mean(length1), sdl = sd(length1), .by = c(sex,main_bas)) %>%
+  ggplot(aes(length1, factor(main_bas))) +
+  geom_boxplot(outlier.color = "grey",
+               outlier.size = 0.5) +
   theme_minimal()
+
+# # juvenile size at age
+# data.biph %>%
+#   filter(age.type == "juve.only",
+#          #spat.unit == "Upper-Normandy"
+#          ) %>%
+#   ggplot(aes(x = juv.age, y =length_mm)) +
+#   geom_point(alpha = 0.3) +
+#   geom_smooth(method = "gam", formula = y ~ s(x, k = 3)) +
+#   #geom_smooth(method = lm) +
+#   facet_wrap(~spat.unit)
+#   
+# data.biph %>%
+#   filter(!age.type == "sea.only",
+#          #spat.unit == "Brittany"
+#          ) %>%
+#   ggplot(aes(x = tot.age, y =length_mm, color = age.type)) +
+#   geom_point(alpha = 0.3) +
+#   geom_smooth(method = "gam", formula = y ~ s(x, k = 3)) +
+#   scale_x_continuous(breaks = seq(0, 13, 1), limit = c(0,NA) ) +
+#   #geom_smooth(method = lm) +
+#   facet_wrap(~spat.unit)
+# 
+# data.biph %>%
+#   #filter(age.type == "both") %>%
+#   mutate(sex = ifelse(sex == 1, "m","f")) %>%
+#   ggplot(aes(tot.age, length_mm, color = factor(smo_age))) +
+#   geom_point(alpha = 0.3, size = 0.5) +
+#   facet_wrap(~spat.unit) +
+#   scale_x_continuous(breaks = seq(0, 13, 1), limit = c(0,NA) ) +
+#   theme_minimal()
 ```
+
+
+## Save data
+```{r}
+saveRDS(df_reca %>% st_drop_geometry(), file = paste0(home, "/data/sweel_data_",Sys.Date(),".RData"))
+```
+

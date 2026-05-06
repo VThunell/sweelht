@@ -1,0 +1,387 @@
+---
+title: "Swedish eel silvering model summary"
+subtitle: "SWEELHT"
+author: "Viktor Thunell" 
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    code-fold: true
+    code-summary: "Show code"
+    page-layout: full
+    embed-resources: true
+    toc: true
+knitr: 
+  opts_chunk:
+    fig.align: center
+    out-width: 80%
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: true
+---
+
+## Load libraries
+
+```{r}
+#| message: false
+#| warning: false
+#| cache: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "tidylog", "devtools","viridis","sf","patchwork","posterior", "tidybayes","bayesplot","nimble","here","reshape2","sdmTMB")
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+devtools::source_url("https://raw.githubusercontent.com/VThunell/diasp-lht/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+theme_set(theme_minimal()) 
+
+# Set path
+home <- here::here()
+```
+
+## Read data
+
+```{r}
+#| message: false
+#| warning: false
+#| cache: false
+
+## Read data
+sweels <- readRDS(file = paste0(home, "/data/sweel_data_2026-05-06.RData"))
+```
+
+## Length at Silvering
+
+### Define data
+
+```{r}
+df.sweel <- sweels %>%
+  drop_na(length1) %>%
+  filter(stage == "Blankål",
+         country == "SE") %>%
+  mutate(mb = as.integer(factor(main_bas)))
+  
+# data.silv <- dfp %>%
+#   mutate(mb = as.integer(factor(main_bas)),
+#          er = as.integer(factor(ecoreg)),
+#          year = as.integer(factor(fi_year, levels = sort(unique(fi_year)), labels = seq_along(sort(unique(fi_year))))),
+#          temp.sc = (dfp$tmp_dc_uyr - mean(dfp$tmp_dc_uyr))/sd(dfp$tmp_dc_uyr),
+#          age.sc = (dfp$ageyear - mean(dfp$ageyear))/sd(dfp$ageyear)) 
+
+rm(dfp)
+```
+
+### Plot silvering data
+```{r}
+# length distributions
+data.silv %>%
+  mutate(sex = if_else(sex == 0, "f", "m")) %>%
+  ggplot() +
+  geom_density(aes(x = length, fill = sex), alpha = 0.5) +
+  facet_wrap(~ecoreg) +
+  theme_minimal()
+
+data.silv %>%
+  mutate(sex = if_else(sex == 0, "f", "m")) %>%
+  ggplot() +
+  geom_density(aes(x = log(length), fill = sex), alpha = 0.3) +
+  labs(title = "log(length)") +
+  facet_wrap(~ecoreg) +
+  theme_minimal() 
+
+# length by age
+data.silv %>%
+  filter(!is.na(ageyear)) %>%
+  mutate(sex = if_else(sex == 0, "f", "m")) %>%
+  ggplot() +
+  geom_point(aes(ageyear, length, color = sex), size = 0.1, alpha = 0.8) +
+  facet_wrap(~ecoreg, scales = "free_y")  +
+  theme_minimal()
+
+# possible temperature effects on silvering length
+data.silv %>%
+  mutate(sex = if_else(sex == 0, "f", "m")) %>%
+  ggplot(aes(tmp_dc_uyr/10, length)) +
+  geom_point(show.legend = FALSE, alpha = 0.5) +
+  geom_smooth(method = "lm", se = TRUE) +
+  facet_wrap(~factor(sex)) +
+  theme_minimal() +
+  labs(x = "Temp. [C]")
+```
+
+
+### n over space and time 
+
+```{r}
+df.sweel %>%
+  summarise(count = n(), .by = c(main_bas))
+
+df.sweel %>%
+  summarise(count = n(), .by = c(year, main_bas)) %>%
+  ggplot(aes(year, main_bas, fill = count)) +
+  geom_tile(color = "gray30") +
+  geom_vline(xintercept = 1998, color = "darkgrey") +
+  scale_fill_viridis_c() +
+  labs(y = "", x = "year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "juveniles")
+```
+
+### Source models / Load samples
+```{r, cache = FALSE}
+# Load samples
+#silv.samples <- readRDS(paste0(home,"//samples/eelsilv.samples_2026-02-11.RData"))$samples # v9
+
+sweelsilv.samples$WAIC # 248012.2 - 20260505 245789.1 - 20260506
+
+s.samples <- sweelsilv.samples$samples 
+# # Or source model code and mcmc (load libs and data)
+# t <- Sys.time()
+# source(file = paste0(home,"/models_eel/model_eel_silvering.R"))
+# Sys.time() - t # approx 4.5 hours with 10000 hmc samples
+
+```
+
+### Traces, ess, and ‘potential scale reduction factor’
+
+Variables "s.sig","Ustar","U","mu.a.gl","sd.a.gl","alpha","bs","bt")
+```{r, cache = FALSE}
+node.sub <- subset_draws(as_draws(s.samples), variable = c("mu_gl","sd_gl"))
+node.sub %>% mcmc_trace()
+node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
+
+node.sub <- subset_draws(as_draws(s.samples), variable = c("sig_s"))
+node.sub[,,sample(1:dim(node.sub)[3], 16)] %>% mcmc_trace()
+node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
+
+node.sub <- subset_draws(as_draws(s.samples), variable = "alpha")
+node.sub[,,sample(1:dim(node.sub)[3], 16)] %>% mcmc_trace()
+node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
+
+```
+
+### Silvering variables
+
+```{r}
+s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[mb]) %>%
+  ggplot() +
+  geom_density(aes(x = exp(alpha), color = factor(mb))) +
+  #facet_wrap(~ecoreg, scales = "free_y", ncol = 3) +
+  theme_minimal() 
+  
+silv.samples[[1]] %>%
+  gather_draws(alpha[er, yr], sep = ",") %>%
+  ungroup() %>%
+  left_join(data.silv %>% distinct(er,ecoreg)) %>%
+  ggplot() +
+  geom_density(aes(x = .value, color = factor(yr))) +
+  facet_wrap(~ecoreg, scales = "free_y", ncol = 3) +
+  theme_minimal() +
+  labs(title = "alpha")
+
+silv.samples[[1]] %>%
+  gather_draws(bs[er], sep = ",") %>%
+  ungroup() %>%
+  left_join(data.silv %>% distinct(er,ecoreg)) %>%
+  ggplot() +
+  geom_density(aes(x = .value, color = ecoreg)) +
+  theme_minimal() +
+  labs(title = "bs")
+
+silv.samples[[1]] %>%
+  gather_draws(s.sigma,bt) %>%
+  ggplot() +
+  geom_boxplot(aes(x = .value, color = .variable)) +
+  facet_wrap(~.variable, scales = "free") +
+  theme_minimal() 
+
+# effect of Temp in % change in length by degree Celcius
+silv.samples[[1]] %>%
+  gather_draws(bt) %>%
+  median_qi() %>%
+  mutate(eff = exp(.value / sd(data.silv$tmp_dc_uyr/10))) # Note that tmp_dc_uyr is in Celcius*10
+
+```
+
+
+### Predicted / observed
+
+```{r}
+# var.lats <- data.silv %>%
+#   mutate(m.lat = mean(ser_y), .by = ecoreg) %>%
+#   distinct(er, ecoreg, m.lat) %>%
+#   arrange(-m.lat)
+
+dfp <- s.samples %>%
+  as_draws() %>%
+  spread_draws(mu_s[ind.id]) %>%
+  median_qi() %>%
+  rename(pred.sl = mu_s) %>%
+  ungroup() %>%
+  left_join(df.sweel %>%
+              select(main_bas,length1,lat,lon) %>%
+              rename(obs.sl = length1) %>%
+              mutate(ind.id = row_number(),
+                     #sex = if_else(sex == 0, "female", "male")
+                     )) #%>%
+  #left_join(var.lats) %>%
+  #mutate(ecoreg = fct_reorder(as.factor(ecoreg), -m.lat))
+
+dfp %>%
+  #slice_sample(n = 50000) %>%
+  ggplot() +
+  geom_abline(slope = 1, color = "darkgrey") +
+  geom_point(aes(x = obs.sl, y = exp(pred.sl), color = main_bas), shape = 4, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~main_bas) +
+  theme_minimal() +
+  labs(y="predicted", x="observed")
+#ggsave(paste0(home, "/report/silv_po.png"), width = 17, height = 14, units = "cm")
+
+```
+
+
+```{r}
+dfp <- silv.samples %>%
+  spread_draws(s.mu[i]) %>%
+  left_join(data.silv %>% 
+              select(ecoreg,sex,fi_year) %>% 
+              mutate(i = row_number()), 
+            by = "i") %>%
+  group_by(.draw, ecoreg, sex, fi_year) %>%
+  summarise(pred.sl = median(s.mu), .groups = "drop") %>%
+  left_join(var.lats) %>%
+  mutate(ecoreg = fct_reorder(as.factor(ecoreg), m.lat),
+         sex = if_else(sex == 0, "female", "male")) %>%
+  mutate(m_pred = median(pred.sl), .by = c(sex))
+
+n.labs <- data.silv %>%
+  summarise(n = n(), .by = c(ecoreg, sex)) %>%
+  mutate(sex = if_else(sex==1, "female", "male"))
+
+dfp %>% summarise(mexp = exp(median(pred.sl)), .by= sex)
+dfp %>% ungroup() %>% summarise(exp(median(pred.sl)), .by= sex)
+
+dfp %>%
+  ggplot() +
+  geom_boxplot(aes(x = exp(pred.sl), y = ecoreg), outliers = FALSE, show.legend = FALSE) +
+  geom_vline(aes(xintercept = exp(m_pred)), color = "darkgrey", size = 0.5) +
+  facet_wrap(~sex, scales = "free_x") +
+  theme_minimal() +
+  labs(x = "Length at silvering [mm]", y = "ecoregion")
+ggsave(paste0(home, "/report/silv_ERl.png"), width = 17, height = 14, units = "cm")
+
+```
+
+### Length over space
+```{r, cache = FALSE}
+# by points
+dfs <- s.samples %>%
+  as_draws() %>%
+  gather_draws(alpha[mb], sep = ",") %>%
+  median_qi() %>%
+  # gather_draws(alpha[mb], bs[er], bt, sep = ",") %>%
+  left_join(df.sweel %>% distinct(main_bas,mb,lat,lon))# %>%
+
+# by catchment  
+dfsca <- ca_sf2 %>%
+  mutate(main_bas = as.factor(main_bas)) %>%
+  left_join(dfs %>% distinct(mb,.value, main_bas)) %>%
+  filter(!is.na(mb)) %>%
+  mutate(pred.length = exp(.value))
+  
+plot_map_Nord +
+  geom_sf(data = dfsca, aes(fill = pred.length), color = NA,  alpha = 0.5) +
+  scale_fill_viridis_c() +
+  geom_point(data = df.sweel %>% drop_na(lat,lon) %>% 
+               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000), #color = , 
+             size = 0.1) 
+  
+# # ungroup() %>%
+#   # mutate(female = alpha + bt*mt,
+#   #        male = alpha + bs + bt*mt,
+#   #        year = yr + 1997) %>%
+#   pivot_longer(cols = c("female","male"), names_to = "sex", values_to = "length") %>%
+#   mutate(length = exp(length)) %>%
+#   mutate(m_length = median(length), .by = c(year,sex)) %>%
+#   left_join(var.lats) %>%
+#   mutate(ecoreg = fct_reorder(ecoreg, -m.lat)) 
+# 
+# dfp %>%
+#   filter(sex == "female") %>%
+#   ggplot() +
+#   geom_boxplot(aes(y = length, x = year, group = year), color = "#F8766D", outliers = FALSE) +
+#   geom_line(aes(y = m_length, x = year), color = "#F8766D", alpha = 0.4) +
+#   facet_wrap(~ecoreg, scales = "free_y") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = rel(.75))) +
+#   labs(x = "year")
+# ggsave(paste0(home, "/report/silv_lf.png"), width = 17, height = 14, units = "cm")
+# 
+# dfp %>%
+#   filter(sex == "male") %>%
+#   ggplot() +
+#   geom_boxplot(aes(y = length, x = year, group = year), color = "#00BFC4", outliers = FALSE) +
+#   geom_line(aes(y = m_length, x = year), color = "#00BFC4", alpha = 0.4) +
+#   facet_wrap(~ecoreg, scales = "free_y") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = rel(.75))) +
+#   labs(x = "year")
+# ggsave(paste0(home, "/report/silv_lm.png"), width = 17, height = 14, units = "cm")  
+
+```
+
+### Correlation/covariance matrix
+```{r}
+# median sample correlation 
+samp <- silv.samples[[1]]
+
+cols <- grep("^R",colnames(as.matrix(samp)))
+
+ner <- length(unique(data.silv$ecoreg))
+
+corr_arr <- array(NA, dim = c(ner, ner, nrow(samp)))
+
+for (i in 1:nrow(samp)) {
+
+  R_sample <- matrix(
+    as.numeric(samp[i, cols]),
+    nrow = ner,
+    ncol = ner,
+    byrow = FALSE
+  )
+
+  corr_arr[, , i] <- crossprod(R_sample)
+}
+
+corr <- apply(corr_arr, c(1, 2), median)
+
+er.labs <- var.lats %>%
+  select(er, ecoreg) %>%
+  { setNames(.$ecoreg, .$er) }
+
+as.data.frame(corr) %>%
+  mutate(r = row_number()) %>%
+  pivot_longer(cols = -r, names_to = "c", values_to = "value") %>%
+  mutate(c = as.integer(gsub("V", "", c)) ) %>%
+  left_join(var.lats, by = c("r" = "er")) %>%
+  left_join(var.lats, by = c("c" = "er"), suffix = c(".x", ".y")) %>%
+  mutate(r = reorder(r, m.lat.x),
+         c = reorder(c, -m.lat.y)) %>%
+  ggplot(aes(x=c, y=r, fill = value)) + 
+  geom_tile() +
+  scale_fill_viridis_c() +
+  scale_x_discrete(labels = er.labs) +
+  scale_y_discrete(labels = er.labs) +
+  theme(axis.text = element_text(angle = 45, hjust = 1, size = rel(.75))) +
+  labs(x = "", y = "")
+ggsave(paste0(home, "/report/silv_cor.png"), width = 17, height = 14, units = "cm")  
+```
