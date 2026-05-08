@@ -127,11 +127,14 @@ kul_ind2 %>%
 
 # join them
 #cols <- c("length1","length2","weight1","weight2","age","lat","lon","sex","stage","db","year")
+unique(c(kul_ind2$sex,sb_ind2$sex))
 cols <- c("length1","weight1","age","lat","lon","sex","stage","db","year")
 df <- sb_ind2 %>% 
   select(all_of(cols)) %>% 
   bind_rows(kul_ind2 %>% 
-              select(all_of(cols)))
+              select(all_of(cols))) %>%
+  mutate(sex = ifelse(sex %in% c("f","Hona"), "female", 
+                      if_else( sex %in% c("m","Hane"), "male", NA)))
 
 ```
 
@@ -191,12 +194,12 @@ plot_map_Nord +
 
 ## Plot silver data
 ```{r}
+# length at age by stage and sex
 df_caco %>%
-  #mutate(sex = ifelse(sex == 1, "m","f")) %>%
   ggplot(aes(age, length1, color = factor(sex))) +
   geom_point(size = 0.1, alpha = 0.3) +
   facet_wrap(~stage) +
-  theme_minimal()  
+  theme_minimal()
 
 # silver length variation
 df_caco %>%
@@ -207,6 +210,37 @@ df_caco %>%
   geom_boxplot(outlier.color = "grey",
                outlier.size = 0.5) +
   theme_minimal()
+
+# silver length variation
+df_caco %>%
+  filter(stage == "Blankål") %>%
+  drop_na(length1) %>%
+  summarise(n = n(), .by = c(sex))
+
+df_caco %>%
+  filter(stage == "Blankål") %>%
+  drop_na(length1) %>%
+  ggplot(aes(length1, factor(main_bas), color = sex)) +
+  geom_boxplot(outlier.color = "grey",
+               outlier.size = 0.5) +
+  theme_minimal()
+
+# almost all individuals have length-weight
+unique(df_caco$stage)
+df_caco %>%
+  #filter(stage == "Blankål") %>%
+  filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
+  drop_na(length1) %>%
+  mutate(weightinfo = if_else(is.na(weight1),0,1)) %>%
+  summarise(n = n(), .by = c(stage,weightinfo))
+
+#
+sb_ind2 %>% 
+  #filter(stage == "Blankål") %>%
+  filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
+  drop_na(length1) %>%
+  mutate(peinfo = if_else(is.na(VäBr),0,1)) %>%
+  summarise(n = n(), .by = c(stage,peinfo))
 
 # # juvenile size at age
 # data.biph %>%
@@ -243,6 +277,6 @@ df_caco %>%
 
 ## Save data
 ```{r}
-saveRDS(df_reca %>% st_drop_geometry(), file = paste0(home, "/data/sweel_data_",Sys.Date(),".RData"))
+saveRDS(df_caco %>% st_drop_geometry(), file = paste0(home, "/data/sweel_data_",Sys.Date(),".RData"))
 ```
 

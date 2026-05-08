@@ -6,41 +6,41 @@ library(nimbleHMC)
 sweelsilv.code <- nimbleCode({
   
   # prior par. from Durif 2005 indiv. mean, https://doi.org/10.1111/j.0022-1112.2005.00662.x
-  sdsl <- sqrt(log(1 + (124/658)^2))  
-  msl <- log(658) - sdsl^2/2
-  sdbsl <- sqrt(log(1 + (23/393)^2))
-  mbsl <- log(393/658) - sdbsl^2/2
-  
-  # overall "global" silver length
-  mu_gl ~ dnorm(msl,sdsl)
-  sd_gl ~ dgamma(shape = 1.5, rate = 1.5 / sdsl)
-  # group means 
-  mu_sig ~ dgamma(shape = 1.5, rate = 1.5 / sdsl) # group sd mean 
-  sd_sig ~ dgamma(shape = 1.5, rate = 1.5 / sdsl*0.75) # sd of the group sd means
-  
-  # group basin estimates
-  for(j in 1:nmb){
-    alpha[j] ~ dnorm(mu_gl, sd = sd_gl)
-    sig_s[j] ~ dlnorm(meanlog = log(mu_sig) - sd_sig^2/2, sdlog = sd_sig)
-  }
-  
-  bs ~ dnorm(mbsl, sd = sdbsl)
-  
-  # Likelihood
-  # for(i in 1:nobs){
-  #   length1[i] ~ dlnorm(meanlog = mu_s[i], sdlog = sig_s)
-  #   mu_s[i] <- alpha[mb[i]] #+ bs[er[i]]*sex[i] + bt*temp.sc[i]
+  # sdsl <- sqrt(log(1 + (124/658)^2))  
+  # msl <- log(658) - sdsl^2/2
+  # sdbsl <- sqrt(log(1 + (23/393)^2))
+  # mbsl <- log(393/658) - sdbsl^2/2
+  # 
+  # # overall "global" silver length
+  # mu_gl ~ dnorm(msl,sdsl)
+  # sd_gl ~ dgamma(shape = 1.5, rate = 1.5 / sdsl)
+  # # group means 
+  # mu_sig ~ dgamma(shape = 1.5, rate = 1.5 / sdsl) # group sd mean 
+  # sd_sig ~ dgamma(shape = 1.5, rate = 1.5 / sdsl*0.75) # sd of the group sd means
+  # 
+  # # group basin estimates
+  # for(j in 1:nmb){
+  #   alpha[j] ~ dnorm(mu_gl, sd = sd_gl)
+  #   sig_s[j] ~ dlnorm(meanlog = log(mu_sig) - sd_sig^2/2, sdlog = sd_sig)
   # }
-  
-  ps[1] ~ dbeta(1,1)  # prop of males (prob. to be 1)
-  ps[2] <- 1-ps[1]
-  
+  # 
+  # bs ~ dnorm(mbsl, sd = sdbsl)
+  alpha ~ dnorm(0, sd = 5)
+  b0 ~ dnorm(0, sd = 5)
+  # 
+  # ps[1] ~ dbeta(1,1)  # prop of males (prob. to be 1)
+  # ps[2] <- 1-ps[1]
+  # 
   # Likelihood for heteroscedastic model
   for(i in 1:nobs){
-    length1[i] ~ dlnorm(meanlog = mu_s[i], sdlog = sig_s[mb[i]])
-    mu_s[i] <- alpha[mb[i]] + bs*sex[i] #+ bt*temp.sc[i]
+    silver[i] ~ dbern(prob = p_s[i])
+    p_s[i] <- 1 / (1 + exp(-z[i])) #logit link
+    z[i] <- alpha + b0[mb[i]] * length_sc[i]
+  
+    L50 <- -alpha/b0
+    #mu_s[i] <- alpha[mb[i]] + bs*sex[i] #+ bt*temp.sc[i]
     
-    sex[i]~dbern(ps[1])
+    #sex[i]~dbern(ps[1])
   }
   
   # 
@@ -96,20 +96,17 @@ sweelsilv.code <- nimbleCode({
   
 })
 
+initsilv = df.sweel2 %>% 
+  mutate(sna = if_else(is.na(silver), 1, NA)) %>% pull(sna)
+
 inits <- function() {
-  sdsl  <- sqrt(log(1 + (124/658)^2))
-  msl   <- log(658) - sdsl^2 / 2
   list(
-    mu_gl   = rnorm(1, msl, sdsl * 0.1),          # start near prior mean
-    sd_gl   = rgamma(1, shape = 1.5, rate = 1.5 / sdsl),
-    mu_sig   = rgamma(1, shape = 1.5, rate = 1.5 / sdsl),
-    sd_sig   = rgamma(1, shape = 1.5, rate = 1.5 / sdsl),
-    sig_s   = rgamma(const$nmb, shape = 1.5, rate = 1.5 / sdsl),
-    ps = rnorm(2,0.5,.1),
-    alpha   = rnorm(const$nmb, msl, sdsl * 0.1)          # nmb must exist in your env
+    alpha = rnorm(1, 0, 1),
+    b0    = rnorm(1, 0, 1),
+    p_s   =  runif(const$nobs,0.1,0.9),
+    silver  = initsilv
   )
 }
-
 
 # initial values generating function for all nodes
 # inits <- function() {
@@ -126,15 +123,15 @@ inits <- function() {
 #   )
 # }
 
-nobs <- nrow(df.sweel)
-nmb <- length(unique(df.sweel$main_bas))
+nobs <- nrow(df.sweel2)
+#nmb <- length(unique(df.sweel$main_bas))
 #nyear <- length(unique(df$year))
 
-const <- list(nobs = nobs,
+const <- list(nobs = nobs
               #eta = 2,
               #ner = ner,
-              nmb = nmb,
-              mb = df.sweel$mb
+              #nmb = nmb,
+              #mb = df.sweel$mb
               #nyear = nyear,
               # temp.sc = data.silv$temp.sc,
               # year = data.silv$year,
@@ -145,12 +142,12 @@ const <- list(nobs = nobs,
 sweelsilv.model <- nimbleModel(sweelsilv.code,
                                constants = const,
                                inits=inits(),
-                               data = df.sweel %>% select(length1,sex), buildDerivs = TRUE)
+                               #data = df.sweel %>% select(length1,sex), buildDerivs = TRUE)
+                               data = df.sweel2 %>% select(silver,length_sc), buildDerivs = TRUE)
 
 sweelsilv.model$simulate()
 sweelsilv.model$calculate()
 sweelsilv.model$initializeInfo()
-
 
 dataNodes <- sweelsilv.model$getNodeNames(dataOnly = TRUE)
 parentNodes <- sweelsilv.model$getParents(dataNodes, stochOnly = TRUE) #all of these should be added to monitor below to recreate other model variables...
@@ -167,7 +164,7 @@ for(i in 1:length(vs)){
 # compile model
 sweelsilv.c <- compileNimble(sweelsilv.model)
 
-monits = c(mvars,"mu_s")
+monits = c(mvars,"p_s")
 
 # configure and build mcmc and add hmc to alpha and sigma nodes
 sweelsilv.confmcmc <- configureHMC(sweelsilv.c, monitors = monits, enableWAIC = TRUE)
@@ -177,6 +174,6 @@ sweelsilv.mcmc <- buildMCMC(sweelsilv.confmcmc, project = sweelsilv.model)
 # compile mcmc
 sweelsilv.mcmcc <- compileNimble(sweelsilv.mcmc, project = sweelsilv.model)
 
-sweelsilv.samples <- runMCMC(sweelsilv.mcmcc, niter = 4000, nburnin = 3000, nchains = 1, thin = 1, WAIC=TRUE)
+sweelsilv.samples <- runMCMC(sweelsilv.mcmcc, niter = 2000, nburnin = 1000, nchains = 1, thin = 1, WAIC=TRUE)
 
 #saveRDS(sweelsilv.samples, file = paste0(home,"/models_eel/samples/sweelsilv.samples_",Sys.Date(),".RData"))
