@@ -37,7 +37,7 @@ invisible(lapply(pkgs, library, character.only = T))
 devtools::source_url("https://raw.githubusercontent.com/VThunell/diasp-lht/main/R/functions/map-plot.R") # message of SHA-1 hash for file
 
 options(ggplot2.continuous.colour = "viridis")
-
+theme_set(theme_minimal()) 
 # Set path
 home <- here::here()
 
@@ -49,7 +49,9 @@ home <- here::here()
 ```{r}
 sb_ind <- read.delim("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/ÅlindividerSötebasen.csv", sep=";", dec=",", fileEncoding="Latin1")
 
-colnames(sb_ind) 
+colnames(sb_ind)
+unique(sb_ind$)
+
 sb_ind %>% 
 #   filter(InsamlMetod == "Fiskmärkning"),
 #          Årtal1 != Årtal2)
@@ -100,8 +102,71 @@ sb_ind3 <- sb_ind2 %>%
   left_join(D_ph, join_by(row_id)) 
 
 # check how durif correspond to visual
-sb_ind3 %>% summarise(n = n(), .by = c(Durif_stage,stage)) %>% arrange(-n)
+sb_ind3 %>% summarise(n = n(), .by = c(Durif_stage,visual_stage)) %>% arrange(-n)
   
+
+a <- sb_ind3 %>%
+  drop_na(Durif_stage,sex) %>%
+  filter(sex %in% c("f","m")) %>%
+  # with wrong classifications;
+  mutate(condensed_stage = case_when(Durif_stage %in% c("I","FII") & sex == "f" ~ "f<3",
+                                     Durif_stage %in% c("FIII") & sex == "f" ~ "f3",
+                                     Durif_stage %in% c("FIV","FV") & sex == "f" ~ "f>3",
+                                     Durif_stage %in% c("I","MII") & sex == "m" ~ "m<3",
+                                     .default = Durif_stage)) %>%
+  # With a possible solution assuming sex info is correct
+  # mutate(condensed_stage = case_when(Durif_stage %in% c("I","FII","MII") & sex == "f" ~ "fpre3",
+  #                                    Durif_stage %in% c("FIII") & sex == "f" ~ "f3",
+  #                                    Durif_stage %in% c("FIV","FV") & sex == "f" ~ "fpost3",
+  #                                    Durif_stage %in% c("I","MII","FII") & sex == "m" ~ "mpre3",
+  #                                    Durif_stage %in% c("FIII","FV") & sex == "m" ~ "m3",
+  #                                    .default = Durif_stage)) %>%
+  
+  ggplot() +
+  geom_density(aes(length1, color = condensed_stage), alpha = 0.5) +
+  #geom_density(aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
+  #scale_fill_viridis_d() +
+  facet_wrap(~sex, scales = "free") 
+
+a2 <- sb_ind3 %>%
+  drop_na(Durif_stage,sex) %>%
+  filter(sex %in% c("f","m")) %>%
+  # With a possible solution assuming sex info is correct
+  mutate(condensed_stage = case_when(Durif_stage %in% c("I","FII","MII") & sex == "f" ~ "fpre3",
+                                     Durif_stage %in% c("FIII") & sex == "f" ~ "f3",
+                                     Durif_stage %in% c("FIV","FV") & sex == "f" ~ "fpost3",
+                                     Durif_stage %in% c("I","MII","FII") & sex == "m" ~ "mpre3",
+                                     Durif_stage %in% c("FIII","FV") & sex == "m" ~ "m3",
+                                     .default = Durif_stage)) %>%
+  ggplot() +
+  geom_density(aes(length1, color = condensed_stage), alpha = 0.5) +
+  geom_density(data = sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
+                                         sex %in% c("f","m")), aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
+  #scale_fill_viridis_d() +
+  facet_wrap(~sex, scales = "free") 
+
+b <- sb_ind3 %>% 
+  drop_na(Durif_stage,sex) %>%
+  filter(sex %in% c("f","m")) %>%
+  ggplot() +
+  #geom_density(aes(length1, color = condensed_stage), alpha = 0.5) +
+  geom_density(aes(length1, color = visual_stage), alpha = 0.4) +
+  #scale_fill_viridis_d() +
+  facet_wrap(~sex, scales = "free") 
+
+a/b
+a2/b
+
+sb_ind3 %>%
+  drop_na(Durif_stage) %>%
+  filter(sex %in% c("m"))
+         length1 > 450)
+  
+sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
+                   sex %in% c("f","m"),
+                   #visual_stage == "Gulål") 
+                   visual_stage == "Blankål")
+
 #   #HöBr,VäBr,HöH,HöV,VäH,VäV, Note length1 is in mm - dividing with 10.
 #   mutate(eye_index = 100*(pi*((VäH + VäV)/4)^2) / (length1),
 #          fin_index = (VäBr / length1) * 100,
