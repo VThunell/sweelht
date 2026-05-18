@@ -401,7 +401,7 @@ unique(sweels$stage)
 df.sweel2 <- sweels %>%
   drop_na(length1) %>%
   filter(stage %in% c("Blankål","Halvblank ål","Gulål"),
-         country == "SE") %>%
+         country == "SE") %>% 
   mutate(silver = case_when(stage == "Blankål" ~ 1,
                            stage == "Halvblank ål" ~ NA,
                            stage == "Gulål" ~ 0,
@@ -410,7 +410,7 @@ df.sweel2 <- sweels %>%
          length_sc = (length1 - mean(length1)) / sd(length1),
          mb = as.integer(factor(main_bas)),
          sex = as.integer(if_else(sex == "female", 0, 1)),
-         ind.id = row_number())
+         ind.id = row_number()) 
 
 df.sweel2 %>%
   ggplot(aes(age, length1, color = factor(silver))) +
@@ -430,20 +430,13 @@ rm(dfp)
 ### Plot silvering data
 ```{r}
 # length distributions
-data.silv %>%
+df.sweel2 %>%
   mutate(sex = if_else(sex == 0, "f", "m")) %>%
   ggplot() +
   geom_density(aes(x = length, fill = sex), alpha = 0.5) +
   facet_wrap(~ecoreg) +
   theme_minimal()
 
-data.silv %>%
-  mutate(sex = if_else(sex == 0, "f", "m")) %>%
-  ggplot() +
-  geom_density(aes(x = log(length), fill = sex), alpha = 0.3) +
-  labs(title = "log(length)") +
-  facet_wrap(~ecoreg) +
-  theme_minimal() 
 
 # length by age
 data.silv %>%
@@ -472,16 +465,15 @@ data.silv %>%
 df.sweel %>%
   summarise(count = n(), .by = c(main_bas))
 
-df.sweel %>%
+df.sweel2 %>%
   summarise(count = n(), .by = c(year, main_bas)) %>%
-  ggplot(aes(year, main_bas, fill = count)) +
+  ggplot(aes(year, factor(main_bas), fill = count)) +
   geom_tile(color = "gray30") +
-  geom_vline(xintercept = 1998, color = "darkgrey") +
+  #geom_vline(xintercept = 1998, color = "darkgrey") +
   scale_fill_viridis_c() +
   labs(y = "", x = "year") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  labs(title = "juveniles")
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
 ### Source models / Load samples
@@ -489,9 +481,13 @@ df.sweel %>%
 # Load samples
 #silv.samples <- readRDS(paste0(home,"//samples/eelsilv.samples_2026-02-11.RData"))$samples # v9
 
-sweelsilv.samples$WAIC 
-# for non-sex specific  33029.01 - 20260507
-# for sex specific 13874.87 - 20260507 
+sweelsilv.samples$WAIC
+# for simple 33029.01 - 20260507
+# for spatial alpha 13956.79 - 20260507  
+# for spatial and hierachical alpha 13875.92 - 20260508
+# for spatial b0 and hierachical spatial alpha 13570.31 - 20260508
+# for spatial and hierachical alpha and b0 13506.59 - 20260511
+# for spatial and hierachical alpha and b0 21417.19 - 20260511 (this adds data som incomparable to previous models)
 
 s.samples <- sweelsilv.samples$samples 
 # # Or source model code and mcmc (load libs and data)
@@ -499,14 +495,20 @@ s.samples <- sweelsilv.samples$samples
 # source(file = paste0(home,"/models_eel/model_eel_silvering.R"))
 # Sys.time() - t # approx 4.5 hours with 10000 hmc samples
 
+
 ```
 
 ### Traces, ess, and ‘potential scale reduction factor’
 
 Variables "s.sig","Ustar","U","mu.a.gl","sd.a.gl","alpha","bs","bt")
 ```{r, cache = FALSE}
-node.sub <- subset_draws(as_draws(s.samples), variable = c("alpha","b0"))
-node.sub %>% mcmc_trace()
+as_draws(s.samples) %>% variable.names()
+node.sub <- subset_draws(as_draws(s.samples), variable = c("alpha"))
+node.sub[,sample(1:dim(node.sub)[2], 16)] %>% mcmc_trace() # one chain
+node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
+
+node.sub <- subset_draws(as_draws(s.samples), variable = c("log_b0"))
+node.sub[,sample(1:dim(node.sub)[2], 16)] %>% mcmc_trace() # one chain
 node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
 
 node.sub <- subset_draws(as_draws(s.samples), variable = "p_s")
@@ -514,30 +516,60 @@ node.sub <- subset_draws(as_draws(s.samples), variable = "p_s")
 node.sub[,sample(1:dim(node.sub)[2], 16)] %>% mcmc_trace() # one chain
 node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
 
+variable.names(as_draws(s.samples)) %>%
+  str_remove("\\[.*\\]") %>% unique()
+node.sub <- subset_draws(as_draws(s.samples), variable = "bs")
+#node.sub[,,sample(1:dim(node.sub)[3], 16)] %>% mcmc_trace()
+node.sub %>% mcmc_trace() # one chain
+node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
 
 ```
 
 ### Silvering variables
 
 ```{r}
+# alpha
+s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[mb]) %>%
+  ggplot() +
+  geom_density(aes(x = alpha, color = factor(mb))) +
+  #facet_wrap(~ecoreg, scales = "free_y", ncol = 3) +
+  theme_minimal() 
+
+# b0
+s.samples %>%
+  as_draws() %>%
+  spread_draws(log_b0[mb]) %>%
+  #mutate(b0 = exp(log_b0)) %>%
+  ggplot() +
+  geom_density(aes(x = exp(log_b0), color = factor(mb))) +
+  #facet_wrap(~ecoreg, scales = "free_y", ncol = 3) +
+  theme_minimal() 
+
 # L50
-node.sub %>%
-  spread_draws(alpha, b0) %>%
-  mutate(L50_sc = alpha/b0,
+s.samples %>%
+  spread_draws(alpha[mb], log_b0[mb]) %>%
+  mutate(L50_sc = -alpha/exp(log_b0),
          L50 = L50_sc * sd(df.sweel2$length1) + mean(df.sweel2$length1)) %>%
   ggplot() +
-  geom_density(aes(L50)) +
-  theme_minimal()
+  geom_density(aes(L50, color = factor(mb))) +
+  theme_minimal() +
+  xlim(0,1500)
+  #xlim(-5,5)
   
-#
+# 
 s.samples %>%
   as_draws() %>%
   spread_draws(alpha[mb]) %>%
   ggplot() +
   geom_density(aes(x = exp(alpha), color = factor(mb))) +
   #facet_wrap(~ecoreg, scales = "free_y", ncol = 3) +
-  theme_minimal() 
-  
+  theme_minimal()
+```
+
+
+```{r}
 silv.samples[[1]] %>%
   gather_draws(alpha[er, yr], sep = ",") %>%
   ungroup() %>%
@@ -606,6 +638,31 @@ dfp %>%
 
 ```
 
+### logistic function p ~ length
+```{r}
+# using alpha, b0 which is per basin 
+dfzb <- s.samples %>%
+  spread_draws(alpha[mb], log_b0[mb]) %>%
+  median_qi() %>%
+  expand_grid(length_sc = seq(min(df.sweel2$length_sc),max(df.sweel2$length_sc), by = 0.05), sex = 0:1) %>%
+  left_join(df.sweel2 %>% distinct(main_bas,mb)) %>%
+  ungroup() %>%
+  mutate(p_mean = 1 / (1 + exp(-(alpha + exp(log_b0)*length_sc))))
+
+smb <- sample(df.sweel2$mb, 16, replace = FALSE)
+dfzb %>%
+  filter(sex == 0,
+         mb %in% smb) %>%
+  ggplot() +
+  geom_line(aes(x = length_sc, y = p_mean, color = factor(main_bas)), show.legend = FALSE) +
+  geom_point(data = df.sweel2 %>% filter(sex == 0,mb %in% smb), aes(length_sc, y = silver, color = factor(main_bas)),show.legend = FALSE, alpha = 0.3) +
+  facet_wrap(~main_bas) 
+
+dfzb %>%
+  filter(sex == 0) %>%
+  ggplot() +
+  geom_line(aes(x = length_sc, y = p_mean, color = factor(main_bas)), show.legend = FALSE)
+```
 
 ```{r}
 dfp <- silv.samples %>%
@@ -641,25 +698,26 @@ ggsave(paste0(home, "/report/silv_ERl.png"), width = 17, height = 14, units = "c
 
 ### Length over space
 ```{r, cache = FALSE}
-# by points
+# L50 by points
 dfs <- s.samples %>%
   as_draws() %>%
-  gather_draws(alpha[mb], sep = ",") %>%
+  spread_draws(alpha[mb], log_b0[mb], sep = ",") %>%
   median_qi() %>%
+  mutate(L50 = -alpha/exp(log_b0)) %>%
   # gather_draws(alpha[mb], bs[er], bt, sep = ",") %>%
-  left_join(df.sweel %>% distinct(main_bas,mb,lat,lon))# %>%
+  left_join(df.sweel2 %>% distinct(main_bas,mb,lat,lon))# %>%
 
 # by catchment  
 dfsca <- ca_sf2 %>%
-  mutate(main_bas = as.factor(main_bas)) %>%
-  left_join(dfs %>% distinct(mb,.value, main_bas)) %>%
-  filter(!is.na(mb)) %>%
+  #mutate(main_bas = as.factor(main_bas)) %>%
+  left_join(dfs %>% distinct(mb,L50,main_bas)) %>%
+  filter(!is.na(mb)) #%>%
   mutate(pred.length = exp(.value))
   
 plot_map_Nord +
-  geom_sf(data = dfsca, aes(fill = pred.length), color = NA,  alpha = 0.5) +
+  geom_sf(data = dfsca, aes(fill = L50), color = NA,  alpha = 0.5) +
   scale_fill_viridis_c() +
-  geom_point(data = df.sweel %>% drop_na(lat,lon) %>% 
+  geom_point(data = df.sweel2 %>% drop_na(lat,lon) %>% 
                add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000), #color = , 
              size = 0.1) 
   

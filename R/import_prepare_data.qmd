@@ -50,6 +50,17 @@ home <- here::here()
 sb_ind <- read.delim("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/ÅlindividerSötebasen.csv", sep=";", dec=",", fileEncoding="Latin1")
 
 colnames(sb_ind) 
+sb_ind %>% 
+#   filter(InsamlMetod == "Fiskmärkning"),
+#          Årtal1 != Årtal2)
+#   #mutate(n = n(), .by = IndividNr) %>%
+#   #filter(n > 1)
+#   #mutate(ismark = if_else(n > 1, 1,0)) %>%
+#   #summarise(n = n(), .by = c(ismark)) 
+   summarise(n = n(), .by = c(InsamlMetod)) #%>%
+#   #summarise(n = n(), .by = c(Märkning)) %>%
+# arrange(-n)
+  #distinct(InsamlMetod)
 
 sb_ind2 <- sb_ind %>%
   filter(!(is.na(Längd1) & is.na(Längd2) & is.na(Vikt2) & is.na(Vikt2) & Åldersprov == "Nej")) %>%
@@ -59,7 +70,7 @@ sb_ind2 <- sb_ind %>%
          weight2 = Vikt2,
          age = Ålder,
          sex = Kön,
-         stage = Stadium
+         visual_stage = Stadium
          ) %>%
   # These uses "." as dec
   mutate(across(c(WGS84_E_Vatten, WGS84_N_Vatten, WGS84_N_Plats, WGS84_E_Plats), readr::parse_number),
@@ -70,10 +81,49 @@ sb_ind2 <- sb_ind %>%
          year = if_else(Årtal1 == Årtal2, Årtal1, year(as_date(FångstDatum)))
          )
   
-sb_ind2 %>% 
-  distinct()
+# Calculate Durif index for sb individuals where info on eye width and fin length exist, return NA for when that info is missing. Results in a vector with corresponding sb_ind2 row-numbers
+D_ph <- sb_ind2 %>%
+  rename(BL = length1,
+         W = weight1,
+         Dv = VäV,
+         Dh = VäH,
+         FL = VäBr) %>%
+  select(BL,W,Dv,Dh,FL) %>%
+  as.matrix() %>%
+  stacomiR::fun_stage_durif() %>%
+  tibble(Durif_stage = .) %>% 
+  mutate(row_id = row_number()) 
+
+# join in Durif stage index 
+sb_ind3 <- sb_ind2 %>%
+  mutate(row_id = row_number()) %>%
+  left_join(D_ph, join_by(row_id)) 
+
+# check how durif correspond to visual
+sb_ind3 %>% summarise(n = n(), .by = c(Durif_stage,stage)) %>% arrange(-n)
   
+#   #HöBr,VäBr,HöH,HöV,VäH,VäV, Note length1 is in mm - dividing with 10.
+#   mutate(eye_index = 100*(pi*((VäH + VäV)/4)^2) / (length1),
+#          fin_index = (VäBr / length1) * 100,
+#          is_silver = case_when(eye_index >= 6.5 ~ "Silver",
+#                                eye_index < 6.5  ~ "Yellow/Resident",
+#                                TRUE             ~ "Unknown"),
+#          durif_stage = case_when(
+#            # Stage I: Small, immature yellow eels
+#            BL < 45 & eye_index < 6.5 ~ "I",
+#            # Stage II: Larger growth phase, still yellow
+#            BL >= 45 & eye_index < 6.5 ~ "II",
+#            # Stage III: Pre-migrant/Transitional phase
+#            eye_index >= 6.5 & eye_index < 8.0 & fin_index < 4.5 ~ "III",
+#            # Stage IV: Migrating phase (Silvering)
+#            eye_index >= 8.0 & fin_index >= 4.5 & fin_index < 5.0 ~ "IV",
+#            # Stage V: Advanced migrating phase
+#            eye_index >= 8.0 & fin_index >= 5.0 ~ "V",
+#            # Catch-all for data outside typical ranges
+#           TRUE ~ "Indeterminate"))
+
 ```
+
 
 ### KUL
 
@@ -95,6 +145,17 @@ sb_ind2 %>%
 kul_ind <- readRDS("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/KUL_2026-05-04.RData")
 
 colnames(kul_ind)
+kul_ind %>% 
+  #filter(InsamlMetod == "Fiskmärkning"),
+  #       Årtal1 != Årtal2)
+  #mutate(n = n(), .by = Ind_id) %>%
+  #filter(n > 1)
+  #mutate(ismark = if_else(n > 1, 1,0)) %>%
+  #summarise(n = n(), .by = c(ismark)) 
+  #summarise(n = n(), .by = c(InsamlMetod)) %>%
+  #summarise(n = n(), .by = c(Märkning)) %>%
+#arrange(-n)
+  distinct(Redskap)
 
 kul_ind2 <- kul_ind %>% 
   #filter(!(is.na(Längd1) & is.na(Längd2) & is.na(Vikt2) & is.na(Vikt2) & Åldersprov == "Nej"))
@@ -103,7 +164,7 @@ kul_ind2 <- kul_ind %>%
          #  weight2 = Vikt2,
          age = Ålder,
          sex = Kön,
-         stage = Artbestämning,
+         visual_stage = Artbestämning,
          year = Fiskeår
          ) %>%
   mutate(lon = Bäst_longitud_decimal_grader,
@@ -128,13 +189,14 @@ kul_ind2 %>%
 # join them
 #cols <- c("length1","length2","weight1","weight2","age","lat","lon","sex","stage","db","year")
 unique(c(kul_ind2$sex,sb_ind2$sex))
-cols <- c("length1","weight1","age","lat","lon","sex","stage","db","year")
+cols <- c("length1","weight1","age","lat","lon","sex","visual_stage","db","year","")
 df <- sb_ind2 %>% 
   select(all_of(cols)) %>% 
   bind_rows(kul_ind2 %>% 
               select(all_of(cols))) %>%
   mutate(sex = ifelse(sex %in% c("f","Hona"), "female", 
                       if_else( sex %in% c("m","Hane"), "male", NA)))
+
 
 ```
 
@@ -198,12 +260,19 @@ plot_map_Nord +
 df_caco %>%
   ggplot(aes(age, length1, color = factor(sex))) +
   geom_point(size = 0.1, alpha = 0.3) +
+  facet_wrap(~visual_stage) +
+  theme_minimal()
+
+df_caco %>%
+  filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
+  ggplot(aes(age, length1, color = factor(sex))) +
+  geom_point(size = 0.1, alpha = 0.3) +
   facet_wrap(~stage) +
   theme_minimal()
 
 # silver length variation
 df_caco %>%
-  filter(stage == "Blankål") %>%
+  filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
   drop_na(length1) %>%
   #summarise(ml = mean(length1), sdl = sd(length1), .by = c(sex,main_bas)) %>%
   ggplot(aes(length1, factor(main_bas))) +
@@ -234,13 +303,22 @@ df_caco %>%
   mutate(weightinfo = if_else(is.na(weight1),0,1)) %>%
   summarise(n = n(), .by = c(stage,weightinfo))
 
-#
-sb_ind2 %>% 
-  #filter(stage == "Blankål") %>%
+df_caco %>%
   filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
   drop_na(length1) %>%
-  mutate(peinfo = if_else(is.na(VäBr),0,1)) %>%
-  summarise(n = n(), .by = c(stage,peinfo))
+  #mutate(sex = if_else(sex == 0, "f", "m")) %>%
+  ggplot() +
+  geom_density(aes(x = length1, fill = factor(sex)), alpha = 0.3) +
+  labs(title = "log(length)") +
+  theme_minimal() 
+
+#
+# sb_ind2 %>% 
+#   #filter(stage == "Blankål") %>%
+#   filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
+#   drop_na(length1) %>%
+#   mutate(peinfo = if_else(is.na(VäBr),0,1)) %>%
+#   summarise(n = n(), .by = c(stage,peinfo))
 
 # # juvenile size at age
 # data.biph %>%
@@ -273,6 +351,7 @@ sb_ind2 %>%
 #   scale_x_continuous(breaks = seq(0, 13, 1), limit = c(0,NA) ) +
 #   theme_minimal()
 ```
+
 
 
 ## Save data
