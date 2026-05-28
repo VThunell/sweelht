@@ -24,7 +24,8 @@ execute:
 ```{r libs}
 #| message: false
 
-pkgs <- c("tidyverse", "devtools", "purrr","janitor","patchwork","DBI","odbc","arrow","sf","sdmTMB")
+pkgs <- c("tidyverse", "devtools","tidylog","stacomiR","stacomirtools",
+ "purrr","janitor","patchwork","DBI","odbc","arrow","sf","sdmTMB")
 
 
 if(length(setdiff(pkgs, rownames(installed.packages()))) > 0){
@@ -50,19 +51,6 @@ home <- here::here()
 sb_ind <- read.delim("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/ÅlindividerSötebasen.csv", sep=";", dec=",", fileEncoding="Latin1")
 
 colnames(sb_ind)
-unique(sb_ind$)
-
-sb_ind %>% 
-#   filter(InsamlMetod == "Fiskmärkning"),
-#          Årtal1 != Årtal2)
-#   #mutate(n = n(), .by = IndividNr) %>%
-#   #filter(n > 1)
-#   #mutate(ismark = if_else(n > 1, 1,0)) %>%
-#   #summarise(n = n(), .by = c(ismark)) 
-   summarise(n = n(), .by = c(InsamlMetod)) #%>%
-#   #summarise(n = n(), .by = c(Märkning)) %>%
-# arrange(-n)
-  #distinct(InsamlMetod)
 
 sb_ind2 <- sb_ind %>%
   filter(!(is.na(Längd1) & is.na(Längd2) & is.na(Vikt2) & is.na(Vikt2) & Åldersprov == "Nej")) %>%
@@ -93,21 +81,66 @@ D_ph <- sb_ind2 %>%
   select(BL,W,Dv,Dh,FL) %>%
   as.matrix() %>%
   stacomiR::fun_stage_durif() %>%
-  tibble(Durif_stage = .) %>% 
+  tibble(Durif_stage = .) %>%
   mutate(row_id = row_number()) 
 
 # join in Durif stage index 
 sb_ind3 <- sb_ind2 %>%
   mutate(row_id = row_number()) %>%
-  left_join(D_ph, join_by(row_id)) 
+  left_join(D_ph, join_by(row_id))
+```
 
+#### Durif vs Visual
+```{r}
 # check how durif correspond to visual
 sb_ind3 %>% summarise(n = n(), .by = c(Durif_stage,visual_stage)) %>% arrange(-n)
   
+# check densitoes of durif stages vs visual for females
+# lump/condense stages
+sb_ind3 %>%
+  distinct(Durif_stage)
+  drop_na(Durif_stage,visual_stage,sex) %>%
+  filter(sex %in% c("f"),
+         visual_stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
+  # with wrong classifications;
+  mutate(redDurif_stage = case_when(Durif_stage %in% c("I","FII") & sex == "f" ~ "I & FII",
+                                     Durif_stage %in% c("FIII") & sex == "f" ~ "FIII",
+                                     Durif_stage %in% c("FIV","FV") & sex == "f" ~ "FIV & FV",
+                                     #Durif_stage %in% c("I","MII") & sex == "m" ~ "m<3",
+                                     .default = Durif_stage)) %>%
+  summarise(n = n(), .by = c(Durif_stage,visual_stage)) %>% arrange(visual_stage)
+#a0 <- 
+  sb_ind3 %>%
+  drop_na(Durif_stage,visual_stage,sex) %>%
+  filter(sex %in% c("f"),
+         visual_stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
+  # with wrong classifications;
+  mutate(redDurif_stage = case_when(Durif_stage %in% c("I","FII") & sex == "f" ~ "I & FII",
+                                     Durif_stage %in% c("FIII") & sex == "f" ~ "FIII",
+                                     Durif_stage %in% c("FIV","FV") & sex == "f" ~ "FIV & FV",
+                                     Durif_stage %in% c("MII") ~ "I & FII",
+                                     .default = Durif_stage)) %>%
+  # With a possible solution assuming sex info is correct
+  # mutate(condensed_stage = case_when(Durif_stage %in% c("I","FII","MII") & sex == "f" ~ "fpre3",
+  #                                    Durif_stage %in% c("FIII") & sex == "f" ~ "f3",
+  #                                    Durif_stage %in% c("FIV","FV") & sex == "f" ~ "fpost3",
+  #                                    Durif_stage %in% c("I","MII","FII") & sex == "m" ~ "mpre3",
+  #                                    Durif_stage %in% c("FIII","FV") & sex == "m" ~ "m3",
+  #                                    .default = Durif_stage)) %>%
+  
+  ggplot() +
+  geom_density(aes(length1, color = redDurif_stage)) +
+  geom_density(aes(length1, fill = visual_stage), alpha = 0.5, color = NA) +
+  #geom_density(aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
+  #scale_fill_viridis_d() +
+  facet_wrap(~sex, scales = "free")
+```
 
+
+```{r}
 a <- sb_ind3 %>%
   drop_na(Durif_stage,sex) %>%
-  filter(sex %in% c("f","m")) %>%
+  filter(sex %in% c("f")) %>%
   # with wrong classifications;
   mutate(condensed_stage = case_when(Durif_stage %in% c("I","FII") & sex == "f" ~ "f<3",
                                      Durif_stage %in% c("FIII") & sex == "f" ~ "f3",
@@ -126,7 +159,7 @@ a <- sb_ind3 %>%
   geom_density(aes(length1, color = condensed_stage), alpha = 0.5) +
   #geom_density(aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
   #scale_fill_viridis_d() +
-  facet_wrap(~sex, scales = "free") 
+  facet_wrap(~sex, scales = "free")
 
 a2 <- sb_ind3 %>%
   drop_na(Durif_stage,sex) %>%
@@ -139,8 +172,10 @@ a2 <- sb_ind3 %>%
                                      Durif_stage %in% c("FIII","FV") & sex == "m" ~ "m3",
                                      .default = Durif_stage)) %>%
   ggplot() +
-  geom_density(aes(length1, color = condensed_stage), alpha = 0.5) +
-  geom_density(data = sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
+  geom_histogram(aes(length1, color = condensed_stage), alpha = 0.5) +
+  # geom_density(data = sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
+  #                                        sex %in% c("f","m")), aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
+  geom_histogram(data = sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage) & is.na(sex)),
                                          sex %in% c("f","m")), aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
   #scale_fill_viridis_d() +
   facet_wrap(~sex, scales = "free") 
@@ -159,7 +194,7 @@ a2/b
 
 sb_ind3 %>%
   drop_na(Durif_stage) %>%
-  filter(sex %in% c("m"))
+  filter(sex %in% c("m"),
          length1 > 450)
   
 sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
@@ -189,7 +224,6 @@ sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
 
 ```
 
-
 ### KUL
 
 ```{r}
@@ -208,9 +242,8 @@ sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
 # KUL <- dbGetQuery(AQ_con,"select * from AquaDW_prod.mart.KUL_INDIVID_NEW where Art = 'Ål'")
 # saveRDS(KUL, file = paste0( "/Users/vitl0001/Documents/Projects/SWEel-lhts/data/KUL_",Sys.Date(),".RData"))
 kul_ind <- readRDS("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/KUL_2026-05-04.RData")
-
 colnames(kul_ind)
-kul_ind %>% 
+#kul_ind %>% 
   #filter(InsamlMetod == "Fiskmärkning"),
   #       Årtal1 != Årtal2)
   #mutate(n = n(), .by = Ind_id) %>%
@@ -220,10 +253,10 @@ kul_ind %>%
   #summarise(n = n(), .by = c(InsamlMetod)) %>%
   #summarise(n = n(), .by = c(Märkning)) %>%
 #arrange(-n)
-  distinct(Redskap)
+  #distinct(Redskap)
 
 kul_ind2 <- kul_ind %>% 
-  #filter(!(is.na(Längd1) & is.na(Längd2) & is.na(Vikt2) & is.na(Vikt2) & Åldersprov == "Nej"))
+  filter(!(is.na(Slutlängd_cm) & is.na(Totalvikt_gram) & is.na(Ålder))) %>%
   rename(length1 = Slutlängd_mm,
          weight1 = Totalvikt_gram,
          #  weight2 = Vikt2,
@@ -235,7 +268,6 @@ kul_ind2 <- kul_ind %>%
   mutate(lon = Bäst_longitud_decimal_grader,
          lat = Bäst_latitud_decimal_grader,
          db = "kul")
-
 ```
 <!-- Error in `dbConnect()`: -->
 <!-- ! ODBC failed with error 00000 from [unixODBC][Driver Manager]. -->
@@ -245,36 +277,51 @@ kul_ind2 <- kul_ind %>%
 
 ## Join data
 ```{r}
- # can there be dupes between the dbs?
+# can there be dupes between the dbs?
 dupes <- c(kul_ind$Ind_id,sb_ind2$IndividID)[duplicated(c(kul_ind$Ind_id,sb_ind2$IndividID))]
-
 kul_ind2 %>%
-  filter(Ind_id %in% dupes) %>% select(length1, age,db) %>% bind_cols(sb_ind2 %>% filter(IndividID %in% dupes) %>% select(length1,age,db))  # likely not
+  filter(Ind_id %in% dupes) %>% select(length1, age,db) %>% bind_cols(sb_ind2 %>% filter(IndividID %in% dupes) %>% select(length1,age,db)) # likely not
 
-# join them
+# join the sb and kul data
 #cols <- c("length1","length2","weight1","weight2","age","lat","lon","sex","stage","db","year")
-unique(c(kul_ind2$sex,sb_ind2$sex))
-cols <- c("length1","weight1","age","lat","lon","sex","visual_stage","db","year","")
-df <- sb_ind2 %>% 
-  select(all_of(cols)) %>% 
+cols <- c("length1","weight1","age","lat","lon","sex","visual_stage","Durif_stage","db","year")
+df <- sb_ind3 %>% 
+  select(all_of(cols), VattenNamn) %>% 
   bind_rows(kul_ind2 %>% 
-              select(all_of(cols))) %>%
+            mutate(Durif_stage = NA) %>%
+            select(all_of(cols), Lokal)) %>%
   mutate(sex = ifelse(sex %in% c("f","Hona"), "female", 
-                      if_else( sex %in% c("m","Hane"), "male", NA)))
-
+                      if_else( sex %in% c("m","Hane"), "male", NA)),
+         ind_id = row_number())
 
 ```
 
-## Retrieve spatial basin info 
+## Retrieve spatial info
 
 ```{r}
 # make data spatial object
 df_sf <- st_as_sf(df %>% drop_na(lat,lon), coords = c("lon", "lat"), crs = 4326,  remove = FALSE)
 
-ca <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/catchments/", format = "parquet")
 re <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/refeel/", format = "parquet")
+ca <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/catchments/", format = "parquet")
 
-# catchments (basins)
+# refeel countries
+co_sf <- re %>%
+  collect() %>%
+  filter(are_lev_code %in% "Country") %>%
+  mutate(geometry = st_as_sfc(geom_polygon), crs = 4326) %>%
+  st_as_sf(sf_column_name = "geometry", crs = 4326)
+
+# join in country info and drop non SE data points
+df_co <- df_sf %>%
+  st_join(co_sf %>% select(are_code), join = st_nearest_feature) %>%
+  rename(country = are_code) %>%
+  filter(country == "SE")
+
+plot_map_Nord +
+  geom_point(data = df_co %>% st_drop_geometry() %>% add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = country), size = 0.1)
+
+# main catchments / basins / HARO
 ca_sf <- ca %>%
   collect() %>%
   mutate(geometry = st_as_sfc(shape, EWKB = TRUE, crs = 4326),
@@ -285,142 +332,61 @@ ca_sf <- ca %>%
   summarise() %>%
   ungroup()
 
-# refeel countries
-co_sf <- re %>%
-  collect() %>%
-  filter(are_lev_code %in% "Country") %>%
-  mutate(geometry = st_as_sfc(geom_polygon), crs = 4326) %>%
-  st_as_sf(sf_column_name = "geometry", crs = 4326) 
+plot_map_Nord +
+  geom_sf(data = ca_sf)
 
-# add in spatial info and remove geometry
-df_ca <- ca_sf %>%
-  st_join(df_sf,left = FALSE)
-  
-df_caco <- df_ca %>%
-  st_join(co_sf %>% select(are_code)) %>%
-  rename(country = are_code) %>% st_drop_geometry()
+# add in catchments to sötebasen data
+df_coca_sb <- df_co %>%
+  filter(db == "sb") %>%
+  st_join(ca_sf, join = st_intersects)
 
-# select the basins with data
+# those without main_bas
+df_coca_sb %>% filter(is.na(main_bas)) %>%
+  st_drop_geometry() %>%
+  distinct(VattenNamn)
+
+# Fix Dalälven to have the same main_bas as the other Dalälven
+dal_mb <- df_coca_sb %>% filter(VattenNamn == "Dalälven" & !is.na(main_bas)) %>% distinct(main_bas) %>% pull()
+
+df_coca_sb <- df_coca_sb %>%
+  mutate(main_bas = if_else(VattenNamn == "Dalälven", dal_mb, main_bas)) 
+
+df_coca_sb %>%  
+filter(is.na(main_bas)) %>%
+  distinct(VattenNamn)
+# 
+# plot_map_Nord +
+#   geom_point(data = df_ca %>% filter(!is.na(main_bas)) %>% st_drop_geometry() %>% add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000), color = "red",size = 0.1) +
+#   geom_point(data = df_ca %>% filter(is.na(main_bas)) %>% st_drop_geometry() %>% add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000), size = 0.1)
+
+# join the sb and kul spatial units data
+
+df_all <- df_coca_sb %>%
+  mutate(spat.unit = if_else(is.na(main_bas), VattenNamn, as.character(main_bas))) %>%
+  bind_rows(df_co %>%
+              filter(db == "kul") %>%
+              mutate(spat.unit = as.character(Lokal))) %>%
+  as_tibble()
+
+# select the basins with data for plotting the catchments
 ca_sf2 <- ca_sf %>%
-  filter(main_bas %in% df_caco$main_bas)
+  filter(main_bas %in% df_coca_sb$main_bas)
 ```
 
 ## Data points in space and catchments
-
 ```{r}
-swe_mbs <- df_caco %>% filter(country == "SE") %>% distinct(main_bas) %>% pull(main_bas)
-#plot_map_Euro + # one point in Italy
-plot_map_Nord + 
-  geom_sf(data = ca_sf2 %>% filter(main_bas %in% swe_mbs), aes(fill = factor(main_bas)), color = NA,  alpha = 0.3)  +
-  geom_point(data = df_caco %>% filter(country == "SE") %>% 
+plot_map_Nord +
+  geom_sf(data = ca_sf2, aes(fill = factor(main_bas)), color = NA,  alpha = 0.3)  +
+  geom_point(data = df_all %>% 
                add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = db), size = 0.1) 
+  #guides(color = guide_legend(title.position = "top"))
   # scale_fill_viridis_d() +
   # scale_color_viridis_d()
 
 ```
 
-## Plot silver data
-```{r}
-# length at age by stage and sex
-df_caco %>%
-  ggplot(aes(age, length1, color = factor(sex))) +
-  geom_point(size = 0.1, alpha = 0.3) +
-  facet_wrap(~visual_stage) +
-  theme_minimal()
-
-df_caco %>%
-  filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
-  ggplot(aes(age, length1, color = factor(sex))) +
-  geom_point(size = 0.1, alpha = 0.3) +
-  facet_wrap(~stage) +
-  theme_minimal()
-
-# silver length variation
-df_caco %>%
-  filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
-  drop_na(length1) %>%
-  #summarise(ml = mean(length1), sdl = sd(length1), .by = c(sex,main_bas)) %>%
-  ggplot(aes(length1, factor(main_bas))) +
-  geom_boxplot(outlier.color = "grey",
-               outlier.size = 0.5) +
-  theme_minimal()
-
-# silver length variation
-df_caco %>%
-  filter(stage == "Blankål") %>%
-  drop_na(length1) %>%
-  summarise(n = n(), .by = c(sex))
-
-df_caco %>%
-  filter(stage == "Blankål") %>%
-  drop_na(length1) %>%
-  ggplot(aes(length1, factor(main_bas), color = sex)) +
-  geom_boxplot(outlier.color = "grey",
-               outlier.size = 0.5) +
-  theme_minimal()
-
-# almost all individuals have length-weight
-unique(df_caco$stage)
-df_caco %>%
-  #filter(stage == "Blankål") %>%
-  filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
-  drop_na(length1) %>%
-  mutate(weightinfo = if_else(is.na(weight1),0,1)) %>%
-  summarise(n = n(), .by = c(stage,weightinfo))
-
-df_caco %>%
-  filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
-  drop_na(length1) %>%
-  #mutate(sex = if_else(sex == 0, "f", "m")) %>%
-  ggplot() +
-  geom_density(aes(x = length1, fill = factor(sex)), alpha = 0.3) +
-  labs(title = "log(length)") +
-  theme_minimal() 
-
-#
-# sb_ind2 %>% 
-#   #filter(stage == "Blankål") %>%
-#   filter(stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
-#   drop_na(length1) %>%
-#   mutate(peinfo = if_else(is.na(VäBr),0,1)) %>%
-#   summarise(n = n(), .by = c(stage,peinfo))
-
-# # juvenile size at age
-# data.biph %>%
-#   filter(age.type == "juve.only",
-#          #spat.unit == "Upper-Normandy"
-#          ) %>%
-#   ggplot(aes(x = juv.age, y =length_mm)) +
-#   geom_point(alpha = 0.3) +
-#   geom_smooth(method = "gam", formula = y ~ s(x, k = 3)) +
-#   #geom_smooth(method = lm) +
-#   facet_wrap(~spat.unit)
-#   
-# data.biph %>%
-#   filter(!age.type == "sea.only",
-#          #spat.unit == "Brittany"
-#          ) %>%
-#   ggplot(aes(x = tot.age, y =length_mm, color = age.type)) +
-#   geom_point(alpha = 0.3) +
-#   geom_smooth(method = "gam", formula = y ~ s(x, k = 3)) +
-#   scale_x_continuous(breaks = seq(0, 13, 1), limit = c(0,NA) ) +
-#   #geom_smooth(method = lm) +
-#   facet_wrap(~spat.unit)
-# 
-# data.biph %>%
-#   #filter(age.type == "both") %>%
-#   mutate(sex = ifelse(sex == 1, "m","f")) %>%
-#   ggplot(aes(tot.age, length_mm, color = factor(smo_age))) +
-#   geom_point(alpha = 0.3, size = 0.5) +
-#   facet_wrap(~spat.unit) +
-#   scale_x_continuous(breaks = seq(0, 13, 1), limit = c(0,NA) ) +
-#   theme_minimal()
-```
-
-
-
 ## Save data
 ```{r}
-saveRDS(df_caco %>% st_drop_geometry(), file = paste0(home, "/data/sweel_data_",Sys.Date(),".RData"))
+saveRDS(df_all %>% st_drop_geometry(), file = paste0(home, "/data/sweel_data_",Sys.Date(),".RData"))
 ```
 

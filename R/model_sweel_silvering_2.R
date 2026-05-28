@@ -24,18 +24,18 @@ sweelsilv.code <- nimbleCode({
     b0[j] <- exp(log_b0[j])
   }
   
-  ps[1] ~ dbeta(1,1)  # prop of males (prob. to be 1)
-  ps[2] <- 1-ps[1]
+  #ps[1] ~ dbeta(1,1)  # prop of males (prob. to be 1)
+  #ps[2] <- 1-ps[1]
   
-  bs ~ dnorm(mbsl, sd = mbsl*0.3)
+  #bs ~ dnorm(mbsl, sd = mbsl*0.3)
   
   # Likelihood
   for(i in 1:nobs){
     silver[i] ~ dbern(prob = p[i])
     p[i] <- 1 / (1 + exp(-z[i])) #logit link
-    z[i] <- alpha[mb[i]] + b0[mb[i]] * length_sc[i] + bs*sex[i] #+ bt*temp.sc[i]
+    z[i] <- alpha[mb[i]] + b0[mb[i]] * length_sc[i] #+ bs*sex[i] #+ bt*temp.sc[i]
   
-    sex[i] ~ dbern(ps[1])
+    #sex[i] ~ dbern(ps[1])
   }
   
 })
@@ -61,16 +61,16 @@ inits <- function() {
   list(
     alpha = rnorm(const$nmb, 0, 1),
     log_b0  = rnorm(const$nmb, 0, .1),
-    ps   = rnorm(2,0.5,.1),
-    bs = rnorm(1,0.5,.1),
+    #ps   = rnorm(2,0.5,.1),
+    #bs = rnorm(1,0.5,.1),
     log_b0 = rep(log(const$mb0), const$nmb),
     mu_a_gl = rnorm(1, 500, 1),
     sd_a_gl = rnorm(1, 50, 1),
     mu_b_gl = rnorm(1, log(1), 1),
     sd_b_gl = rnorm(1, 1, 0.1),
     p   = runif(const$nobs,0.1,0.9),
-    silver  = initsilv,
-    sex = initsex
+    silver  = initsilv
+    #sex = initsex
   )
 }
 
@@ -78,7 +78,7 @@ inits <- function() {
 sweelsilv.model <- nimbleModel(sweelsilv.code,
                                constants = const,
                                inits=inits(),
-                               data = df.sweel2 %>% select(silver,length_sc,sex), buildDerivs = TRUE)
+                               data = df.sweel2 %>% select(silver,length_sc), buildDerivs = TRUE)
 #sweelsilv.model$silver[27811]
 sweelsilv.model$simulate()
 sweelsilv.model$calculate()
@@ -111,4 +111,4 @@ sweelsilv.mcmcc <- compileNimble(sweelsilv.mcmc, project = sweelsilv.model)
 
 sweelsilv.samples <- runMCMC(sweelsilv.mcmcc, niter = 2000, nburnin = 1000, nchains = 1, WAIC=TRUE)
 
-#saveRDS(sweelsilv.samples, file = paste0(home,"/models_eel/samples/sweelsilv.samples_",Sys.Date(),".RData"))
+saveRDS(sweelsilv.samples, file = paste0(home,"/data/samples/sweelsilv.samples_",Sys.Date(),".RData"))
