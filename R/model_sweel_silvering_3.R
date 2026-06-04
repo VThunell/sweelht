@@ -29,22 +29,25 @@ sweelsilv.code <- nimbleCode({
   # Likelihood
   for(i in 1:nobs){
     
-    # classifiers observing the latent true stage
-    silver_vis[i] ~ dbern(p_visual[i])
-    silver_dur[i] ~ dbern(p_measured[i])
-    
-    # probability of each classifier to retur 1, given true stage
-    p_visual[i] <- silver[i] * se_v + (1 - silver[i]) * (1 - sp_v)
-    p_measured[i] <- silver[i] * se_d + (1 - silver[i]) * (1 - sp_d)
-    
-    # process model
-    silver[i] ~ dbern(p[i])
-    p[i] <- 1 / (1 + exp(-z[i]))
-    z[i] <- alpha[su[i]] + b0[su[i]]*length_sc[i] + b1*age_sc[i]
-  
-    #sex[i] ~ dbern(ps[1])
     age_sc[i] ~ dnorm(0, 1)
     length_sc[i] ~ dnorm(0, 1)
+    
+    z[i] <- alpha[su[i]] + b0[su[i]]*length_sc[i] + b1*age_sc[i]
+    p[i] <- 1 / (1 + exp(-z[i]))
+    silver[i] ~ dbern(p[i])
+
+    # probability of each classifier to return 1, given true stage
+    p_vis[i] <- silver[i]*se_v + (1 - silver[i])*(1 - sp_v)
+    p_dur[i] <- silver[i]*se_d + (1 - silver[i])*(1 - sp_d)
+    
+    # classifiers observing the latent true stage
+    silver_vis[i] ~ dbern(p_vis[i])
+    silver_dur[i] ~ dbern(p_dur[i])
+    
+    # posterior predictive nodes
+    silver_rep[i] ~ dbern(p[i])
+    visual_rep[i]   ~ dbern(silver_rep[i] * se_v + (1 - silver_rep[i]) * (1 - sp_v))
+    durif_rep[i] ~ dbern(silver_rep[i] * se_d + (1 - silver_rep[i]) * (1 - sp_d))
   }
   
 })

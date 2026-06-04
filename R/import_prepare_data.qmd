@@ -35,7 +35,7 @@ if(length(setdiff(pkgs, rownames(installed.packages()))) > 0){
 invisible(lapply(pkgs, library, character.only = T))
 
 # # Source code for map plots
-devtools::source_url("https://raw.githubusercontent.com/VThunell/diasp-lht/main/R/functions/map-plot.R") # message of SHA-1 hash for file
+devtools::source_url("https://raw.githubusercontent.com/VThunell/diasp-lht/main/R/functions/map-plot.R") 
 
 options(ggplot2.continuous.colour = "viridis")
 theme_set(theme_minimal()) 
@@ -64,7 +64,7 @@ sb_ind2 <- sb_ind %>%
          ) %>%
   # These uses "." as dec
   mutate(across(c(WGS84_E_Vatten, WGS84_N_Vatten, WGS84_N_Plats, WGS84_E_Plats), readr::parse_number),
-         # when Plats coords are missing, we use the Vatten name. ~800 eels lacks coords
+         # when Plats coords are missing, we use the Vatten name. ~800 eels lacks coords but many of h
          lon = if_else(is.na(WGS84_E_Plats), WGS84_E_Vatten, WGS84_E_Plats),
          lat = if_else(is.na(WGS84_N_Plats), WGS84_N_Vatten, WGS84_N_Plats),
          db = "sb",
@@ -95,132 +95,18 @@ sb_ind3 <- sb_ind2 %>%
 # check how durif correspond to visual
 sb_ind3 %>% summarise(n = n(), .by = c(Durif_stage,visual_stage)) %>% arrange(-n)
   
-# check densitoes of durif stages vs visual for females
+# check densities of durif stages vs visual for females
 # lump/condense stages
 sb_ind3 %>%
-  distinct(Durif_stage)
   drop_na(Durif_stage,visual_stage,sex) %>%
   filter(sex %in% c("f"),
          visual_stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
-  # with wrong classifications;
   mutate(redDurif_stage = case_when(Durif_stage %in% c("I","FII") & sex == "f" ~ "I & FII",
                                      Durif_stage %in% c("FIII") & sex == "f" ~ "FIII",
                                      Durif_stage %in% c("FIV","FV") & sex == "f" ~ "FIV & FV",
                                      #Durif_stage %in% c("I","MII") & sex == "m" ~ "m<3",
                                      .default = Durif_stage)) %>%
   summarise(n = n(), .by = c(Durif_stage,visual_stage)) %>% arrange(visual_stage)
-#a0 <- 
-  sb_ind3 %>%
-  drop_na(Durif_stage,visual_stage,sex) %>%
-  filter(sex %in% c("f"),
-         visual_stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
-  # with wrong classifications;
-  mutate(redDurif_stage = case_when(Durif_stage %in% c("I","FII") & sex == "f" ~ "I & FII",
-                                     Durif_stage %in% c("FIII") & sex == "f" ~ "FIII",
-                                     Durif_stage %in% c("FIV","FV") & sex == "f" ~ "FIV & FV",
-                                     Durif_stage %in% c("MII") ~ "I & FII",
-                                     .default = Durif_stage)) %>%
-  # With a possible solution assuming sex info is correct
-  # mutate(condensed_stage = case_when(Durif_stage %in% c("I","FII","MII") & sex == "f" ~ "fpre3",
-  #                                    Durif_stage %in% c("FIII") & sex == "f" ~ "f3",
-  #                                    Durif_stage %in% c("FIV","FV") & sex == "f" ~ "fpost3",
-  #                                    Durif_stage %in% c("I","MII","FII") & sex == "m" ~ "mpre3",
-  #                                    Durif_stage %in% c("FIII","FV") & sex == "m" ~ "m3",
-  #                                    .default = Durif_stage)) %>%
-  
-  ggplot() +
-  geom_density(aes(length1, color = redDurif_stage)) +
-  geom_density(aes(length1, fill = visual_stage), alpha = 0.5, color = NA) +
-  #geom_density(aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
-  #scale_fill_viridis_d() +
-  facet_wrap(~sex, scales = "free")
-```
-
-
-```{r}
-a <- sb_ind3 %>%
-  drop_na(Durif_stage,sex) %>%
-  filter(sex %in% c("f")) %>%
-  # with wrong classifications;
-  mutate(condensed_stage = case_when(Durif_stage %in% c("I","FII") & sex == "f" ~ "f<3",
-                                     Durif_stage %in% c("FIII") & sex == "f" ~ "f3",
-                                     Durif_stage %in% c("FIV","FV") & sex == "f" ~ "f>3",
-                                     Durif_stage %in% c("I","MII") & sex == "m" ~ "m<3",
-                                     .default = Durif_stage)) %>%
-  # With a possible solution assuming sex info is correct
-  # mutate(condensed_stage = case_when(Durif_stage %in% c("I","FII","MII") & sex == "f" ~ "fpre3",
-  #                                    Durif_stage %in% c("FIII") & sex == "f" ~ "f3",
-  #                                    Durif_stage %in% c("FIV","FV") & sex == "f" ~ "fpost3",
-  #                                    Durif_stage %in% c("I","MII","FII") & sex == "m" ~ "mpre3",
-  #                                    Durif_stage %in% c("FIII","FV") & sex == "m" ~ "m3",
-  #                                    .default = Durif_stage)) %>%
-  
-  ggplot() +
-  geom_density(aes(length1, color = condensed_stage), alpha = 0.5) +
-  #geom_density(aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
-  #scale_fill_viridis_d() +
-  facet_wrap(~sex, scales = "free")
-
-a2 <- sb_ind3 %>%
-  drop_na(Durif_stage,sex) %>%
-  filter(sex %in% c("f","m")) %>%
-  # With a possible solution assuming sex info is correct
-  mutate(condensed_stage = case_when(Durif_stage %in% c("I","FII","MII") & sex == "f" ~ "fpre3",
-                                     Durif_stage %in% c("FIII") & sex == "f" ~ "f3",
-                                     Durif_stage %in% c("FIV","FV") & sex == "f" ~ "fpost3",
-                                     Durif_stage %in% c("I","MII","FII") & sex == "m" ~ "mpre3",
-                                     Durif_stage %in% c("FIII","FV") & sex == "m" ~ "m3",
-                                     .default = Durif_stage)) %>%
-  ggplot() +
-  geom_histogram(aes(length1, color = condensed_stage), alpha = 0.5) +
-  # geom_density(data = sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
-  #                                        sex %in% c("f","m")), aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
-  geom_histogram(data = sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage) & is.na(sex)),
-                                         sex %in% c("f","m")), aes(length1, fill = visual_stage), color = NA, alpha = 0.2) +
-  #scale_fill_viridis_d() +
-  facet_wrap(~sex, scales = "free") 
-
-b <- sb_ind3 %>% 
-  drop_na(Durif_stage,sex) %>%
-  filter(sex %in% c("f","m")) %>%
-  ggplot() +
-  #geom_density(aes(length1, color = condensed_stage), alpha = 0.5) +
-  geom_density(aes(length1, color = visual_stage), alpha = 0.4) +
-  #scale_fill_viridis_d() +
-  facet_wrap(~sex, scales = "free") 
-
-a/b
-a2/b
-
-sb_ind3 %>%
-  drop_na(Durif_stage) %>%
-  filter(sex %in% c("m"),
-         length1 > 450)
-  
-sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
-                   sex %in% c("f","m"),
-                   #visual_stage == "Gulål") 
-                   visual_stage == "Blankål")
-
-#   #HöBr,VäBr,HöH,HöV,VäH,VäV, Note length1 is in mm - dividing with 10.
-#   mutate(eye_index = 100*(pi*((VäH + VäV)/4)^2) / (length1),
-#          fin_index = (VäBr / length1) * 100,
-#          is_silver = case_when(eye_index >= 6.5 ~ "Silver",
-#                                eye_index < 6.5  ~ "Yellow/Resident",
-#                                TRUE             ~ "Unknown"),
-#          durif_stage = case_when(
-#            # Stage I: Small, immature yellow eels
-#            BL < 45 & eye_index < 6.5 ~ "I",
-#            # Stage II: Larger growth phase, still yellow
-#            BL >= 45 & eye_index < 6.5 ~ "II",
-#            # Stage III: Pre-migrant/Transitional phase
-#            eye_index >= 6.5 & eye_index < 8.0 & fin_index < 4.5 ~ "III",
-#            # Stage IV: Migrating phase (Silvering)
-#            eye_index >= 8.0 & fin_index >= 4.5 & fin_index < 5.0 ~ "IV",
-#            # Stage V: Advanced migrating phase
-#            eye_index >= 8.0 & fin_index >= 5.0 ~ "V",
-#            # Catch-all for data outside typical ranges
-#           TRUE ~ "Indeterminate"))
 
 ```
 
@@ -242,18 +128,8 @@ sb_ind3 %>% filter(!(is.na(Durif_stage) & is.na(visual_stage)),
 # KUL <- dbGetQuery(AQ_con,"select * from AquaDW_prod.mart.KUL_INDIVID_NEW where Art = 'Ål'")
 # saveRDS(KUL, file = paste0( "/Users/vitl0001/Documents/Projects/SWEel-lhts/data/KUL_",Sys.Date(),".RData"))
 kul_ind <- readRDS("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/KUL_2026-05-04.RData")
+
 colnames(kul_ind)
-#kul_ind %>% 
-  #filter(InsamlMetod == "Fiskmärkning"),
-  #       Årtal1 != Årtal2)
-  #mutate(n = n(), .by = Ind_id) %>%
-  #filter(n > 1)
-  #mutate(ismark = if_else(n > 1, 1,0)) %>%
-  #summarise(n = n(), .by = c(ismark)) 
-  #summarise(n = n(), .by = c(InsamlMetod)) %>%
-  #summarise(n = n(), .by = c(Märkning)) %>%
-#arrange(-n)
-  #distinct(Redskap)
 
 kul_ind2 <- kul_ind %>% 
   filter(!(is.na(Slutlängd_cm) & is.na(Totalvikt_gram) & is.na(Ålder))) %>%
@@ -275,15 +151,15 @@ kul_ind2 <- kul_ind %>%
 <!-- ℹ From nanodbc/nanodbc.cpp:1184. -->
 <!-- Run `rlang::last_trace()` to see where the error occurred. -->
 
+
 ## Join data
 ```{r}
 # can there be dupes between the dbs?
-dupes <- c(kul_ind$Ind_id,sb_ind2$IndividID)[duplicated(c(kul_ind$Ind_id,sb_ind2$IndividID))]
+dupes <- c(kul_ind2$Ind_id,sb_ind2$IndividID)[duplicated(c(kul_ind2$Ind_id,sb_ind2$IndividID))]
 kul_ind2 %>%
   filter(Ind_id %in% dupes) %>% select(length1, age,db) %>% bind_cols(sb_ind2 %>% filter(IndividID %in% dupes) %>% select(length1,age,db)) # likely not
 
 # join the sb and kul data
-#cols <- c("length1","length2","weight1","weight2","age","lat","lon","sex","stage","db","year")
 cols <- c("length1","weight1","age","lat","lon","sex","visual_stage","Durif_stage","db","year")
 df <- sb_ind3 %>% 
   select(all_of(cols), VattenNamn) %>% 
@@ -354,13 +230,8 @@ df_coca_sb <- df_coca_sb %>%
 df_coca_sb %>%  
 filter(is.na(main_bas)) %>%
   distinct(VattenNamn)
-# 
-# plot_map_Nord +
-#   geom_point(data = df_ca %>% filter(!is.na(main_bas)) %>% st_drop_geometry() %>% add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000), color = "red",size = 0.1) +
-#   geom_point(data = df_ca %>% filter(is.na(main_bas)) %>% st_drop_geometry() %>% add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000), size = 0.1)
 
 # join the sb and kul spatial units data
-
 df_all <- df_coca_sb %>%
   mutate(spat.unit = if_else(is.na(main_bas), VattenNamn, as.character(main_bas))) %>%
   bind_rows(df_co %>%
@@ -378,11 +249,8 @@ ca_sf2 <- ca_sf %>%
 plot_map_Nord +
   geom_sf(data = ca_sf2, aes(fill = factor(main_bas)), color = NA,  alpha = 0.3)  +
   geom_point(data = df_all %>% 
-               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = db), size = 0.1) 
-  #guides(color = guide_legend(title.position = "top"))
-  # scale_fill_viridis_d() +
-  # scale_color_viridis_d()
-
+               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = db), size = 0.1) + 
+  guides(color = guide_legend(title.position = "top"))
 ```
 
 ## Save data
