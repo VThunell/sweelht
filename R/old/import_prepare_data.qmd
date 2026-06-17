@@ -47,21 +47,29 @@ home <- here::here()
 
 ### Sötebasen
 
+Correct for thawing / ethanol Using E. Åswålls functions based on Sundin et al. 2019. Do some renaming
+
 ```{r}
-sb_ind <- read.delim("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/ÅlindividerSötebasen.csv", sep=";", dec=",", fileEncoding="Latin1")
+# source Eiriks conversion scripts 
+source(file = "/Users/vitl0001/Documents/Projects/SWEel-lhts/script-functions-thawedsizes.R")
+
+sb_ind <- read.delim("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/ÅlindividerSötebasen.csv", sep=";", dec=",", fileEncoding="Latin1") %>% convert_alsotebasen_thawed_sizes()
 
 colnames(sb_ind)
 
 sb_ind2 <- sb_ind %>%
-  filter(!(is.na(Längd1) & is.na(Längd2) & is.na(Vikt2) & is.na(Vikt2) & Åldersprov == "Nej")) %>%
-  rename(length1 = Längd1,
-         length2 = Längd2,
-         weight1 = Vikt1,
-         weight2 = Vikt2,
+  rename(length = Längd_corr,
+         weight = Vikt_corr,
          age = Ålder,
          sex = Kön,
          visual_stage = Stadium
          ) %>%
+  filter(!(is.na(length) & is.na(weight) & Åldersprov == "Nej")) %>%
+  rowwise() %>%
+  # get the eye diameter and pectoral fin measurement and take the mean to make sure we use all indiviudlas that have a meassuremnt.
+  mutate(diameter_eye = mean(c(VäD_corr,HöD_corr), na.rm = TRUE),
+         length_pectoral = mean(c(HöBr_corr,VäBr_corr), na.rm = TRUE)) %>%
+  ungroup() %>%
   # These uses "." as dec
   mutate(across(c(WGS84_E_Vatten, WGS84_N_Vatten, WGS84_N_Plats, WGS84_E_Plats), readr::parse_number),
          # when Plats coords are missing, we use the Vatten name. ~800 eels lacks coords but many of h
@@ -70,7 +78,8 @@ sb_ind2 <- sb_ind %>%
          db = "sb",
          year = if_else(Årtal1 == Årtal2, Årtal1, year(as_date(FångstDatum)))
          )
-  
+
+source(file = "/Users/vitl0001/Documents/Projects/SWEel-lhts/script-functions-durif.R")
 # Calculate Durif index for sb individuals where info on eye width and fin length exist, return NA for when that info is missing. Results in a vector with corresponding sb_ind2 row-numbers
 D_ph <- sb_ind2 %>%
   rename(BL = length1,
@@ -89,6 +98,7 @@ sb_ind3 <- sb_ind2 %>%
   mutate(row_id = row_number()) %>%
   left_join(D_ph, join_by(row_id))
 ```
+
 
 #### Durif vs Visual
 ```{r}

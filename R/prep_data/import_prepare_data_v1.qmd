@@ -1,0 +1,286 @@
+---
+title: "Import and prepare swe eel data"
+author: "Viktor Thunell"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format:
+  html:
+    embed-resources: true
+    fig-width: 8
+knitr: 
+  opts_chunk:
+    fig.align: center
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: false
+---
+
+## Introduction 
+
+
+## Load libraries
+  
+```{r libs}
+#| message: false
+
+pkgs <- c("tidyverse", "devtools","tidylog","stacomiR","stacomirtools",
+ "purrr","janitor","patchwork","DBI","odbc","arrow","sf","sdmTMB")
+
+
+if(length(setdiff(pkgs, rownames(installed.packages()))) > 0){
+  install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+}
+
+invisible(lapply(pkgs, library, character.only = T))
+
+# # Source code for map plots
+devtools::source_url("https://raw.githubusercontent.com/VThunell/diasp-lht/main/R/functions/map-plot.R") 
+
+# source Eiriks conversion scripts and Durif stage scripts
+source(file = "/Users/vitl0001/Documents/Projects/SWEel-lhts/script-functions-thawedsizes.R")
+source(file = "/Users/vitl0001/Documents/Projects/SWEel-lhts/script-functions-durif.R")
+
+options(ggplot2.continuous.colour = "viridis")
+theme_set(theme_minimal()) 
+
+# Set path
+home <- here::here()
+
+```
+
+## Get data
+
+### Sötebasen
+
+Correct for thawing / ethanol Using E. Ryvoll-Åsheims functions based on Sundin et al. 2019. Do some renaming and calculate teh Durif index baed on Eirks Ryvoll-Åsheims script for that
+
+```{r}
+# import data and convert 
+sb_ind <- read.delim("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/ÅlindividerSötebasen.csv", sep=";", dec=",", fileEncoding="Latin1") %>% convert_alsotebasen_thawed_sizes()
+
+colnames(sb_ind)
+
+sb_ind2 <- sb_ind %>%
+  rename(length = Längd_corr,
+         weight = Vikt_corr,
+         age = Ålder,
+         sex = Kön,
+         visual_stage = Stadium
+         ) %>%
+  filter(!(is.na(length) & is.na(weight) & Åldersprov == "Nej")) %>%
+  rowwise() %>%
+  # get the eye diameter and pectoral fin measurement and take the mean to make sure we use all individuals that have a meassuremnt.
+  mutate(diameter_eye = mean(c(VäD_corr,HöD_corr), na.rm = TRUE),
+         length_pectoral = mean(c(HöBr_corr,VäBr_corr), na.rm = TRUE)) %>%
+  ungroup() %>%
+  # Fix coordinates. These uses "." as dec
+  mutate(across(c(WGS84_E_Vatten, WGS84_N_Vatten, WGS84_N_Plats, WGS84_E_Plats), readr::parse_number),
+         # when Plats coords are missing, we use the Vatten name. ~800 eels lacks coords but many of h
+         lon = if_else(is.na(WGS84_E_Plats), WGS84_E_Vatten, WGS84_E_Plats),
+         lat = if_else(is.na(WGS84_N_Plats), WGS84_N_Vatten, WGS84_N_Plats),
+         db = "sb",
+         year = if_else(Årtal1 == Årtal2, Årtal1, year(as_date(FångstDatum)))
+         ) %>%
+  # calculate Durif according to Eirik Ryvoll-Åsheims script
+  mutate(durif_stage = stage_durif(length,weight,diameter_eye,length_pectoral,descr=F))
+  
+```
+
+
+#### Durif vs Visual
+```{r}
+# check how durif correspond to visual
+sb_ind2 %>% summarise(n = n(), .by = c(durif_stage,visual_stage)) %>% arrange(-n)
+  
+# check densities of durif stages vs visual for females
+# lump/condense stages
+sb_ind2 %>%
+  drop_na(durif_stage,visual_stage,sex) %>%
+  filter(sex %in% c("f"),
+         visual_stage %in% c("Blankål","Halvblank ål","Gulål")) %>%
+  mutate(redDurif_stage = case_when(durif_stage %in% c("I","FII","MII") ~ "I, MII & FII",
+                                    durif_stage %in% c("FIII") ~ "FIII",
+                                    durif_stage %in% c("FIV","FV") ~ "FIV & FV",
+                                    #durif_stage %in% c("I") & sex == "m" ~ "m<3",
+                                    .default = durif_stage)) %>%
+  #summarise(n = n(), .by = c(durif_stage,visual_stage)) %>% arrange(visual_stage) %>%
+  ggplot() +
+  geom_density(aes(length, color = redDurif_stage), alpha = 0.5) +
+  geom_density(aes(length, fill = visual_stage), color = NA, alpha = 0.2) 
+  
+
+```
+
+### KUL
+
+```{r}
+# Connect to SLU-server:
+# AQ_con <- dbConnect(odbc(),
+#                     Driver = "ODBC Driver 18 for SQL Server",
+#                     Server = "aquadw_prod.db.slu.se",
+#                     USER = "vitl0001", # set you name
+#                     Database = "AquaDW_prod",
+#                     Trusted_Connection = "yes",
+#                     Encrypt = "no",
+#                     encoding = "utf-8")
+#  
+# # Extract the table with all individual eel data.
+#  
+# KUL <- dbGetQuery(AQ_con,"select * from AquaDW_prod.mart.KUL_INDIVID_NEW where Art = 'Ål'")
+# saveRDS(KUL, file = paste0( "/Users/vitl0001/Documents/Projects/SWEel-lhts/data/KUL_",Sys.Date(),".RData"))
+kul_ind <- readRDS("/Users/vitl0001/Documents/Projects/SWEel-lhts/data/KUL_2026-05-04.RData")
+
+colnames(kul_ind)
+
+kul_ind2 <- kul_ind %>% 
+  filter(!(is.na(Slutlängd_cm) & is.na(Totalvikt_gram) & is.na(Ålder))) %>%
+  rename(length = Slutlängd_mm,
+         weight = Totalvikt_gram,
+         #  weight2 = Vikt2,
+         age = Ålder,
+         sex = Kön,
+         visual_stage = Artbestämning,
+         year = Fiskeår
+         ) %>%
+  mutate(lon = Bäst_longitud_decimal_grader,
+         lat = Bäst_latitud_decimal_grader,
+         db = "kul")
+```
+<!-- Error in `dbConnect()`: -->
+<!-- ! ODBC failed with error 00000 from [unixODBC][Driver Manager]. -->
+<!-- ✖ Can't open lib 'SQL Server' : file not found -->
+<!-- ℹ From nanodbc/nanodbc.cpp:1184. -->
+<!-- Run `rlang::last_trace()` to see where the error occurred. -->
+
+
+## Join data
+```{r}
+# can there be dupes between the dbs?
+# dupes <- c(kul_ind2$Ind_id,sb_ind2$IndividID)[duplicated(c(kul_ind2$Ind_id,sb_ind2$IndividID))]
+# kul_ind2 %>%
+#   filter(Ind_id %in% dupes) %>% select(length,age,db) %>% bind_cols(sb_ind2 %>% filter(IndividID %in% dupes) %>% select(length,age,db)) # likely not
+
+# join the sb and kul data
+cols <- c("length","weight","age","lat","lon","sex","visual_stage","durif_stage","db","year")
+df <- sb_ind2 %>% 
+  select(all_of(cols), VattenNamn) %>% 
+  bind_rows(kul_ind2 %>% 
+            mutate(durif_stage = NA) %>%
+            select(all_of(cols), Lokal)) %>%
+  mutate(sex = ifelse(sex %in% c("f","Hona"), "female", 
+                      if_else( sex %in% c("m","Hane"), "male", NA)),
+         ind_id = row_number())
+
+```
+
+## Retrieve spatial info
+
+```{r}
+# make data spatial object
+df_sf <- st_as_sf(df %>% drop_na(lat,lon), coords = c("lon", "lat"), crs = 4326,  remove = FALSE)
+
+re <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/refeel/", format = "parquet")
+ca <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/catchments/", format = "parquet")
+
+# coastal polygon and sea basin (Norra/Södra Östersjön, Bottenviken, Västerhavet). From https://www.dataportal.se/datasets/78_7502.
+ba_sf <- read_sf("/Users/vitl0001/Documents/Projects/SWEel-lhts/Havsomraden_2016/Havsomraden_2016.shp") %>%
+  st_transform(my_shp, crs = 4326) %>%
+  group_by(COMP_AUTH) %>%
+  summarise() %>%
+  ungroup() %>%
+  rename(sea_basin = COMP_AUTH) %>%
+  # rename the NA polygon to get fix these later
+  mutate(sea_basin = if_else(is.na(sea_basin), "FIX", sea_basin))
+
+# refeel countries
+co_sf <- re %>%
+  collect() %>%
+  filter(are_lev_code %in% "Country") %>%
+  mutate(geometry = st_as_sfc(geom_polygon), crs = 4326) %>%
+  st_as_sf(sf_column_name = "geometry", crs = 4326)
+
+# catchments / HARO
+ca_sf <- ca %>%
+  collect() %>%
+  mutate(geometry = st_as_sfc(shape, EWKB = TRUE, crs = 4326),
+         main_catch = main_bas) %>%
+  st_as_sf(sf_column_name = "geometry") %>%
+  select(main_catch) %>%
+  group_by(main_catch) %>%
+  summarise() %>%
+  ungroup()
+
+# get sea_basins of each main catchment to join in sea_basin via catchment instead of coordinate
+ca_sb <- ca %>%
+  collect() %>%
+  mutate(geometry = st_as_sfc(shape, EWKB = TRUE, crs = 4326),
+         main_catch = main_bas) %>%
+  filter(next_down == 0) %>%
+  st_as_sf(sf_column_name = "geometry") %>%
+  st_join(ba_sf, st_nearest_feature) %>%
+  st_drop_geometry() %>%
+  select(main_catch,sea_basin)
+  
+# join in country info and drop non SE data points
+df_co <- df_sf %>%
+  st_join(co_sf %>% select(are_code), join = st_nearest_feature) %>%
+  rename(country = are_code) %>%
+  filter(country == "SE")
+
+plot_map_Nord +
+  geom_point(data = df_co %>% st_drop_geometry() %>% add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = country), size = 0.1)
+
+# set marine to those that intersects with the basins
+df_coba <- df_co %>%
+  st_join(ba_sf, join = st_intersects) %>%
+  mutate(marine = if_else(is.na(sea_basin), "no", "yes")) %>%
+  select(-sea_basin)
+
+# assign basin to marine individuals but exclude the FIX basin and use st_nearest_feature
+df_coba_mar <- df_coba %>%
+  filter(marine == "yes") %>%
+  st_join(ba_sf %>% filter(!sea_basin == "FIX"), join = st_nearest_feature)
+
+# add in catchments and basin to inland individuals (not caught in marine areas)
+df_cobaca_inland <- df_coba %>%
+  filter(marine == "no") %>% 
+  st_join(ca_sf, join = st_nearest_feature) %>%
+  st_drop_geometry() %>%
+  left_join(ca_sb)
+
+# join the inland and marine spatial units data
+df_all <- df_cobaca_inland %>%
+  mutate(spat.unit = as.character(main_catch)) %>%
+  bind_rows(df_coba_mar %>%
+              # For coastal spatial spatial units 
+              #mutate(spat.unit = as.character(sea_basin))) %>% 
+              mutate(spat.unit = if_else(is.na(Lokal), VattenNamn, Lokal))) %>%
+  as_tibble()
+
+# set spatial unit Västerhavet and Östersjön to NA (they are undefined)
+df_all2 <- df_all %>%
+  mutate(spat.unit = if_else(spat.unit %in% c("Västerhavet (hela) ICES SD 20-21","Östersjön (hela) ICES SD 22-32"), NA, spat.unit))
+
+```
+
+## Data points in spatial units, catchments and basins
+```{r}
+plot_map_Nord +
+  geom_sf(data = ca_sf %>% filter(main_catch %in% df_cobaca_inland$main_catch), aes(fill = factor(main_catch)), color = NA,  alpha = 0.3)  +
+  geom_point(data = df_all2 %>%
+               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = factor(spat.unit)), show.legend = FALSE, size = 0.1, ) +
+  labs(caption = "color is spatial unit")
+
+plot_map_Nord +
+  geom_point(data = df_all2z %>%
+               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633) %>%filter( spat.unit == "Östersjön (hela) ICES SD 22-32"), aes(X*1000, Y*1000, color = sea_basin), size = 0.1) +
+  guides(color = guide_legend(title.position = "top"))
+
+```
+
+## Save data
+```{r}
+saveRDS(df_all2 %>% st_drop_geometry(), file = paste0(home, "/data/sweel_data_",Sys.Date(),".RData"))
+```
+

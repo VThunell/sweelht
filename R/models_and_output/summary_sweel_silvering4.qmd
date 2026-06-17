@@ -1,0 +1,852 @@
+---
+title: "Swedish eel silvering model summary"
+subtitle: "SWEELHT"
+author: "Viktor Thunell" 
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+format: 
+  html:
+    code-fold: true
+    code-summary: "Show code"
+    page-layout: full
+    embed-resources: true
+    toc: true
+knitr: 
+  opts_chunk:
+    fig.align: center
+    out-width: 80%
+editor: source
+execute: 
+  echo: true
+  eval: true
+  cache: true
+---
+
+# Latent classs logistic regression for eel migration probability
+
+## Load libraries
+
+```{r}
+#| message: false
+#| warning: false
+#| cache: false
+
+# Load libraries, install if needed
+pkgs <- c("tidyverse", "tidylog", "devtools","viridis","sf","patchwork","posterior","ggridges", "tidybayes","bayesplot","nimble","here","reshape2","sdmTMB")
+
+if(length(setdiff(pkgs,rownames(installed.packages()))) > 0){
+    install.packages(setdiff(pkgs, rownames(installed.packages())), dependencies = T)
+  }
+
+invisible(lapply(pkgs, library, character.only = T))
+
+devtools::source_url("https://raw.githubusercontent.com/VThunell/diasp-lht/main/R/functions/map-plot.R")
+options(ggplot2.continuous.colour = "viridis")
+theme_set(theme_minimal()) 
+
+# Set path
+home <- here::here()
+```
+
+## Read data
+
+```{r}
+#| message: false
+#| warning: false
+#| cache: false
+
+## Read data
+sweels <- readRDS(file = paste0(home, "/data/sweel_data_2026-06-16.RData"))
+```
+
+## Silvering logistic regression model
+
+### Define data
+
+```{r}
+# df.sweel2 <- sweels %>%
+#   drop_na(length) %>%
+#   filter(visual_stage %in% c("Blankål","Halvblank ål","Gulål"),
+#          country == "SE") %>%
+#   mutate(silver = case_when(visual_stage == "Blankål" ~ 1,
+#                             visual_stage == "Halvblank ål" ~ NA,
+#                             visual_stage == "Gulål" ~ 0,
+#                             .default = NA),
+#          silver = as.integer(silver),
+#          length_sc = (length - mean(length)) / sd(length),
+#          mb = as.integer(factor(main_bas)),
+#          sex = as.integer(if_else(sex == "female", 0, 1)),
+#          ind.id = row_number())
+
+df.sweel3 <- sweels %>%
+  # remove rows where used variables have at least two non NAs
+  filter(rowSums(!is.na(select(., visual_stage, durif_stage, weight, length, age))) >= 2,
+  #filter(visual_stage %in% c("Blankål","Halvblank ål","Gulål","Yngel"),
+         !(is.na(visual_stage) & is.na(durif_stage)),
+         sex == "female") %>% 
+  mutate(silver_vis = case_when(visual_stage == "Blankål" ~ 1,
+                                visual_stage == "Halvblank ål" ~ 1,
+                                visual_stage %in% c("Gulål","Yngel","Juvenil") ~ 0,
+                                .default = NA),
+         silver_dur = case_when(durif_stage %in% c("FIV","FV") ~ 1,
+                                #durif_stage %in% c("FIII") ~ 1,
+                                durif_stage %in% c("FIII") ~ NA,
+                                durif_stage %in% c("I","FII","MII") ~ 0,
+                                .default = NA),
+         length_sc = (length - mean(length, na.rm = TRUE)) / sd(length, na.rm = TRUE),
+         age_sc = (age - mean(age, na.rm = TRUE)) / sd(age, na.rm = TRUE),
+         # create dummy su for NA basins
+         spat.unit = if_else(is.na(spat.unit),str_c("dum_",sea_basin),spat.unit),
+         su = as.integer(factor(spat.unit)),
+         sb = case_when(sea_basin == "VH" ~ 1,
+                        !sea_basin == "VH" ~ 2),
+         #sb = as.integer(factor(sea_basin)),
+         marine = if_else(marine == "yes", 1,0),
+         lat_sc = (lat - mean(lat, na.rm = TRUE)) / sd(lat, na.rm = TRUE),
+         ind.id = row_number()) 
+
+# which sites are unbalanced?
+su.bal <- df.sweel3 %>%
+  rowwise() %>%
+  mutate(silver = max(c(silver_vis,silver_dur), na.rm = TRUE)) %>%
+  ungroup() %>%
+  summarise(n = n(), .by = c(silver,spat.unit)) %>%
+  pivot_wider(id_cols = spat.unit, names_from = silver, values_from = n) %>%
+  mutate(ratio = `1`/`0`,
+         balance = if_else(ratio < 0.1 | ratio > 10 | is.na(ratio), 0, 1)) %>%
+  select(spat.unit,balance) %>%
+  # the dummy su:s (Östersjön and Västerhavet) should only contribute to the sb level and thus be unbalanced
+  mutate(balance =  if_else(str_detect(spat.unit, "dum_"), 0, balance))
+
+## join in balance
+df.sweel3 <- df.sweel3 %>%
+  left_join(su.bal)
+
+df.sweel3 %>%
+  distinct(silver_vis,silver_dur)
+
+df.sweel3 %>%
+  summarise(n = n(), .by = c(silver_vis,silver_dur)) %>%
+  arrange(-silver_vis,-silver_dur)
+
+# the sb:s have data so we can get sb level nested hierarchy
+df.sweel3 %>%
+  filter(!(is.na(silver_vis) & is.na(silver_dur))) %>%
+  rowwise() %>%
+  mutate(silver = max(c(silver_vis,silver_dur), na.rm = TRUE)) %>%
+  ungroup() %>%
+  summarise(n = n(), .by = c(silver,sea_basin,sb)) %>%
+  pivot_wider(id_cols = c(sea_basin,sb), names_from = silver, values_from = n)
+
+```
+
+### Plot silvering data
+```{r}
+# length at age by stage and sex
+df.sweel3 %>%
+  ggplot(aes(age, length, color = factor(sex))) +
+  geom_point(size = 0.1, alpha = 0.3) +
+  geom_smooth(method = "gam", formula = y ~ s(x, k = 4), show.legend = FALSE) 
+  facet_wrap(~visual_stage)
+  
+df.sweel3 %>%
+  ggplot(aes(age, length, color = factor(sex))) +
+  geom_point(size = 0.1, alpha = 0.3) +
+  facet_wrap(~durif_stage) 
+
+# relationship between age and silver
+df.sweel3 %>%
+  mutate(silv = silver_vis * silver_dur,
+         silv = if_else(is.na(silv), 0.5, silv)) %>%
+  ggplot(aes(silv, age)) +
+  geom_point(size = 0.1, alpha = 0.3) +
+  geom_smooth(method = "lm", se = TRUE) +
+  theme_minimal()
+  
+# relationship between length and silver
+df.sweel3 %>%
+  mutate(silv = silver_vis * silver_dur,
+         silv = if_else(is.na(silv), 0.5, silv)) %>%
+  ggplot(aes(silv, length)) +
+  geom_point(size = 0.1, alpha = 0.3) +
+  geom_smooth(method = "lm", se = TRUE) +
+  theme_minimal()
+
+# relationship between length and silver
+df.sweel3 %>%
+  mutate(silv = silver_vis * silver_dur,
+         silv = if_else(is.na(silv), 0.5, silv)) %>%
+  ggplot() +
+  geom_histogram(aes(length, fill = factor(tu)), alpha = 0.5) +
+  facet_wrap(~silv)
+
+# length of the silvers (where one of the classifiers says it is silver)
+df.sweel3 %>%
+  mutate(silver_dur = if_else(is.na(silver_dur),-1,silver_dur),
+         silver_vis = if_else(is.na(silver_vis),-1,silver_vis),
+         silv = silver_dur+silver_vis) %>%
+  filter(!silv < 0) %>%
+  ggplot(aes(length, factor(su), color = db)) +
+  geom_boxplot(outlier.color = "grey",
+               outlier.size = 0.5) 
+
+# LHTs of Durif staged eels
+df.sweel3 %>%
+  filter(!is.na(durif_stage)) %>%
+  ggplot(aes(length, factor(su), color = durif_stage)) +
+  geom_boxplot(outlier.color = "grey",
+               outlier.size = 0.5) 
+df.sweel3 %>%
+  filter(!is.na(durif_stage)) %>%
+  ggplot(aes(age, factor(su), color = durif_stage)) +
+  geom_boxplot(outlier.color = "grey",
+               outlier.size = 0.5) 
+df.sweel3 %>%
+  filter(!is.na(durif_stage)) %>%
+  ggplot(aes(weight1, factor(su), color = durif_stage)) +
+  geom_boxplot(outlier.color = "grey",
+               outlier.size = 0.5) 
+
+# length of visual staged eels
+df.sweel3 %>%
+  filter(!is.na(visual_stage)) %>%
+  ggplot(aes(length, factor(su), color = visual_stage)) +
+  geom_boxplot(outlier.color = "grey",
+               outlier.size = 0.5) 
+
+# length-weight
+df.sweel3 %>%
+  drop_na(length,weight1) %>%
+  ggplot(aes(length, weight1,color = factor(silver_dur))) +
+  geom_point(size = 0.1, alpha = 0.3) 
+
+# numbers of inds per clssifier    
+df.sweel3 %>%
+  summarise(n = n(), .by = c(visual_stage,durif_stage)) %>%
+  arrange(visual_stage,-n)
+
+df.sweel3 %>%
+  filter(!(is.na(silver_vis) & is.na(silver_dur))) %>%
+  rowwise() %>%
+  mutate(silver = max(c(silver_vis,silver_dur), na.rm = TRUE)) %>%
+  ungroup() %>%
+  summarise(n = n(), .by = c(silver,spat.unit)) %>%
+  pivot_wider(id_cols = spat.unit, names_from = silver, values_from = n) %>%
+  arrange(-`1`,spat.unit)
+
+df.sweel3 %>%
+  filter(!(is.na(silver_vis) & is.na(silver_dur))) %>%
+  rowwise() %>%
+  mutate(silver = max(c(silver_vis,silver_dur), na.rm = TRUE)) %>%
+  ungroup() %>%
+  summarise(n = n(), .by = c(silver,sea_basin)) %>%
+  pivot_wider(id_cols = sea_basin, names_from = silver, values_from = n) %>%
+  arrange(-`1`,spat.unit)
+```
+### n over space and time 
+
+```{r}
+df.sweel3 %>%
+  summarise(count = n(), .by = c(su))
+
+df.sweel3 %>%
+  summarise(count = n(), .by = c(year, su)) %>%
+  ggplot(aes(year, factor(su), fill = count)) +
+  geom_tile(color = "gray30") +
+  #geom_vline(xintercept = 1998, color = "darkgrey") +
+  scale_fill_viridis_c() +
+  labs(y = "", x = "year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+### Source models / Load samples
+```{r, cache = FALSE}
+# Load samples
+sweelsilv_m1.samples <- readRDS(paste0(home,"/data/samples/sweelsilv.samples_2026-05-27.RData"))$samples # v9
+sweelsilv.samples <- readRDS(paste0(home,"/data/samples/sweelsilv.samples_2026-06-15.RData"))
+
+sweelsilv.samples$WAIC
+# for simple 33029.01 - 20260507
+# for spatial alpha 13956.79 - 20260507
+# for spatial and hierachical alpha 13875.92 - 20260508
+# for spatial b0 and hierachical spatial alpha 13570.31 - 20260508
+# for spatial and hierachical alpha and b0 13506.59 - 20260511
+# for spatial and hierachical alpha and b0 21417.19 - 20260511 (this adds data so incomparable to previous models)
+# for spatial and hierachical alpha and b0 with two classifiers and se/sp: 8411.084
+# 225708 # new data and model after meeting 4/6 (model 4, no condition)
+#  234143.4 20260615 and then 231746.8 for the 4c model with 
+# 232228.8
+
+
+s.samples <- sweelsilv.samples$samples 
+# # Or source model code and mcmc (load libs and data)
+# t <- Sys.time()
+# source(file = paste0(home,"/models_eel/model_eel_silvering.R"))
+# Sys.time() - t # approx 4.5 hours with 10000 hmc samples
+
+
+```
+
+### Traces, ess, and ‘potential scale reduction factor’
+
+Variables "s.sig","Ustar","U","mu.a.gl","sd.a.gl","alpha","bs","bt")
+```{r, cache = FALSE}
+as_draws(s.samples) %>% variable.names()
+node.sub <- subset_draws(as_draws(s.samples), variable = c("alpha_sb","logb0_sb"))
+node.sub <- subset_draws(as_draws(s.samples), variable = c("alpha"))
+node.sub[,,sample(1:dim(node.sub)[3], 16)] %>% mcmc_trace() # two chain
+node.sub[,sample(1:dim(node.sub)[2], 16)] %>% mcmc_trace() # one chain
+node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail")) 
+
+node.sub <- subset_draws(as_draws(s.samples), variable = c("logb0"))
+node.sub[,,sample(1:dim(node.sub)[3], 16)] %>% mcmc_trace() # one chain
+node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
+
+node.sub <- subset_draws(as_draws(s.samples), variable = c("sp_v","sp_d","se_v","se_d","b1","b3","b4"))
+#node.sub <- subset_draws(as_draws(s.samples), variable = c("sp_d","se_d"))
+#node.sub[,,sample(1:dim(node.sub)[3], 16)] %>% mcmc_trace()
+node.sub[] %>% mcmc_trace() # one chain
+node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
+
+variable.names(as_draws(s.samples)) %>%
+  str_remove("\\[.*\\]") %>% unique()
+node.sub <- subset_draws(as_draws(s.samples), variable = "bs")
+#node.sub[,,sample(1:dim(node.sub)[3], 16)] %>% mcmc_trace()
+node.sub %>% mcmc_trace() # one chain
+node.sub %>% summarise_draws(c("mean","median","sd","rhat","ess_bulk","ess_tail"))
+
+node.sub <- subset_draws(as_draws(s.samples), variable = "silver_rep")
+node.sub <- subset_draws(as_draws(s.samples), variable = "measured_rep")
+node.sub[,,sample(1:dim(node.sub)[3], 36)] %>% mcmc_trace()
+#node.sub %>% mcmc_trace() # one chain
+node.sub[,,sample(1:dim(node.sub)[3], 600)] %>% summarise_draws(c("median","sd","rhat","ess_bulk","ess_tail")) %>% arrange(-rhat)
+
+```
+
+### Silvering variables
+
+```{r}
+# alpha_sb/beta0_sb (sea basin unit), baltic vs west coast
+s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha_sb[sb]) %>%
+  left_join(df.sweel3 %>% distinct(sb)) %>%
+  ggplot() +
+  geom_density(aes(x = alpha_sb)) + #, color = factor(sea_basin))) +
+
+s.samples %>%
+  as_draws() %>%
+  spread_draws(logb0_sb[sb]) %>%
+  left_join(df.sweel3 %>% distinct(sb)) %>%
+  ggplot() +
+  geom_density(aes(x = logb0_sb)) #, color = factor(sea_basin))) 
+
+# alpha an b0 by su
+s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su]) %>%
+  left_join(df.sweel3 %>% distinct(su,sb,marine)) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_boxplot(aes(x = alpha, y = su, color = factor(sb), group = factor(su)), outliers = FALSE, show.legend = FALSE) +
+
+s.samples %>%
+  as_draws() %>%
+  spread_draws(logb0[su]) %>%
+  left_join(df.sweel3 %>% distinct(su,sb,marine)) %>%
+  ggplot() +
+  geom_boxplot(aes(x = logb0, y = su, color = factor(sb), group = factor(su)), outliers = FALSE, show.legend = FALSE)
+
+# correlation between alpha and log_b0 ?
+s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su], logb0[su]) %>%
+  median_qi() %>%
+  ggplot(aes(y = alpha, x = logb0, xmin = logb0.lower, xmax = logb0.upper, ymin = alpha.lower, ymax = alpha.upper)) +
+  geom_pointinterval(orientation = "vertical", point_size = 0.8, linewidth = 0.5) +
+  geom_pointinterval(orientation = "horizontal", point_size = 0.8, linewidth = 0.5) 
+
+# L50 for mean age_sc (=0)
+s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su], log_b0[su]) %>%
+  mutate(L50_sc = -alpha/exp(log_b0),
+         L50 = L50_sc * sd(df.sweel3$length) + mean(df.sweel3$length)) %>%
+  ggplot() +
+  geom_density(aes(L50_sc, color = factor(su)), show.legend = FALSE) +
+  theme_minimal() +
+  #xlim(0,1500)
+  xlim(-5,5) +
+  
+# A50 for mean length_sc (=0)
+s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su], b1) %>%
+  mutate(A50_sc = -alpha/b1,
+         A50 = A50_sc * sd(df.sweel3$age) + mean(df.sweel3$age),
+         ) %>%
+  ggplot() +
+  geom_density(aes(A50_sc, color = factor(su)), show.legend = FALSE) +
+  theme_minimal() +
+  #xlim(0,1500)
+  xlim(-15,15) 
+
+# 50% transition surface
+s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su], log_b0[su], b1) %>%
+  median_qi() %>%
+  expand_grid(age_sc = seq(min(df.sweel3$age_sc, na.rm = TRUE), max(df.sweel3$age_sc, na.rm = TRUE), length.out = 10)) %>%
+  mutate(length_sc = (-alpha - b1 * age_sc)/exp(log_b0)) %>%
+  ggplot() +
+  geom_line(aes(age_sc, length_sc, color = factor(su))) 
+  
+# sensitivity and specificity 
+s.samples %>%
+  as_draws() %>%
+  gather_draws(se_d,se_v,sp_d,sp_v) %>%
+  ggplot() +
+  geom_density(aes(x = .value, color = .variable)) +
+  stat_function(fun = dbeta, args = list(shape1 = 1, shape2 = 9)) +
+  xlim(0.9,1) 
+
+s.samples %>%
+  as_draws() %>%
+  gather_draws(b1, b3, b4[sb]) %>%
+  ggplot() +
+  geom_density(aes(.value, color = factor(sb)), show.legend = FALSE) +
+  facet_wrap(~.variable)
+  
+
+```
+
+
+```{r}
+silv.samples[[1]] %>%
+  gather_draws(alpha[er, yr], sep = ",") %>%
+  ungroup() %>%
+  left_join(data.silv %>% distinct(er,ecoreg)) %>%
+  ggplot() +
+  geom_density(aes(x = .value, color = factor(yr))) +
+  facet_wrap(~ecoreg, scales = "free_y", ncol = 3) +
+  theme_minimal() +
+  labs(title = "alpha")
+
+silv.samples[[1]] %>%
+  gather_draws(bs[er], sep = ",") %>%
+  ungroup() %>%
+  left_join(data.silv %>% distinct(er,ecoreg)) %>%
+  ggplot() +
+  geom_density(aes(x = .value, color = ecoreg)) +
+  theme_minimal() +
+  labs(title = "bs")
+
+silv.samples[[1]] %>%
+  gather_draws(s.sigma,bt) %>%
+  ggplot() +
+  geom_boxplot(aes(x = .value, color = .variable)) +
+  facet_wrap(~.variable, scales = "free") +
+  theme_minimal() 
+
+# effect of Temp in % change in length by degree Celcius
+silv.samples[[1]] %>%
+  gather_draws(bt) %>%
+  median_qi() %>%
+  mutate(eff = exp(.value / sd(data.silv$tmp_dc_uyr/10))) # Note that tmp_dc_uyr is in Celcius*10
+
+```
+
+
+### Predicted / observed
+
+```{r}
+# var.lats <- data.silv %>%
+#   mutate(m.lat = mean(ser_y), .by = ecoreg) %>%
+#   distinct(er, ecoreg, m.lat) %>%
+#   arrange(-m.lat)
+
+dfp <- s.samples %>%
+  as_draws() %>%
+  spread_draws(mu_s[ind.id]) %>%
+  median_qi() %>%
+  rename(pred.sl = mu_s) %>%
+  ungroup() %>%
+  left_join(df.sweel %>%
+              select(main_bas,length,lat,lon,sex,ind.id) %>%
+              rename(obs.sl = length))
+  #left_join(var.lats) %>%
+  #mutate(ecoreg = fct_reorder(as.factor(ecoreg), -m.lat))
+
+dfp %>%
+  #filter(is.na(sex)) %>%
+  ggplot() +
+  geom_abline(slope = 1, color = "darkgrey") +
+  geom_point(aes(x = obs.sl, y = exp(pred.sl), color = sex), shape = 4, alpha = 0.7, show.legend = FALSE) +
+  facet_wrap(~main_bas) +
+  theme_minimal() +
+  labs(y="predicted", x="observed")
+#ggsave(paste0(home, "/report/silv_po.png"), width = 17, height = 14, units = "cm")
+
+
+```
+
+### logistic p ~ length
+
+Solve for z = 0 (i.e. when p = 0.5), which means that we want to get the observed length in the expression for $z$; 
+
+$0 = alpha[su] + b_{0,su} * length_sc + b_{1,su} * age_sc$
+
+Conditioned on mean age (age_sc = 0), this becomes:
+
+$L50_{su} = -alpha[su] / b_{0,su}$
+
+```{r}
+# Adding covariate effects to the L50
+# First make mean observed lat and inland/marine to each su
+df_sucov <- df.sweel3 %>%
+  summarise(lat_scmean = mean(lat_sc), .by = su) %>%
+  left_join(df.sweel3 %>% distinct(su, spat.unit, marine,sb,balance))
+  
+# test 1, not correct
+dfzl <- s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su], logb0[su]) %>%
+  median_qi() %>%
+  left_join(df_sucov) %>%
+  left_join(s.samples %>%
+              as_draws() %>%
+              spread_draws(b3,b4[sb]) %>%
+              median_qi(), by = "sb") %>%
+  expand_grid(length_sc = seq(min(df.sweel3$length_sc, na.rm = TRUE), max(df.sweel3$length_sc, na.rm = TRUE), by = 0.075)) %>%
+  #left_join(df.sweel3 %>% distinct(spat.unit,su, sb)) %>%
+  ungroup() %>%
+  # mutate(p_mean = 1 / (1 + exp(-(alpha + exp(logb0)*length_sc + b3*lat_scmean + b4*marine))),
+  #        p_upper = 1 / (1 + exp(-(alpha.upper + exp(logb0.upper)*length_sc + b3.upper*lat_scmean + b4.upper*marine))),
+  #        p_lower = 1 / (1 + exp(-(alpha.lower + exp(logb0.lower)*length_sc + b3.lower*lat_scmean + b4.lower*marine)))
+         mutate(p_mean  = 1 / (1 + exp(-(alpha       + exp(logb0) *length_sc))),
+                p_upper = 1 / (1 + exp(-(alpha.upper + exp(logb0.upper)*length_sc))),
+                p_lower = 1 / (1 + exp(-(alpha.lower + exp(logb0.lower)*length_sc)))
+         )
+
+# test 2, using the posterior and propagating error by calc. L50 by draw
+dfzl <- s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su], logb0[su]) %>%
+  select(-.iteration,-.chain) %>%
+  left_join(df_sucov) %>%
+  left_join(s.samples %>%
+              as_draws() %>%
+              spread_draws(b3,b4[sb]), by = c("sb",".draw")) %>%
+  expand_grid(length_sc = seq(min(df.sweel3$length_sc, na.rm = TRUE), max(df.sweel3$length_sc, na.rm = TRUE), by = 0.075)) %>%
+  mutate(p = 1 / (1 + exp(-(alpha + exp(logb0)*length_sc + b3*lat_scmean + b4*marine)))) %>%
+  group_by(su,length_sc) %>%
+  median_qi(p) %>%
+  left_join(df_sucov) %>%
+  mutate(coast = if_else(marine == 1, "coast","inland"),
+         sb = if_else(sb == 1, "Westcoast","Baltic Sea"))
+  
+dfs <- s.samples %>%
+  as_draws() %>%
+  spread_draws(silver[ind.id]) %>%
+  median_qi() %>%
+  left_join(df.sweel3 %>% distinct(ind.id,su,length)) %>%
+  left_join(df_sucov) %>%
+  ungroup() %>%
+  mutate(coast = if_else(marine == 1, "coast","inland"),
+         sb = if_else(sb == 1, "Westcoast","Baltic Sea"))
+
+dfzl %>%
+  #filter(balance == 1) %>%
+  mutate(length = length_sc*sd(df.sweel3$length, na.rm = TRUE) + mean(df.sweel3$length, na.rm = TRUE)) %>%
+  ggplot() +
+  geom_line(aes(x = length, y = p, group = spat.unit, color = factor(balance)), linewidth = 0.2) +
+  geom_ribbon(aes(x = length, y = p, ymin = .lower, ymax = .upper, group = spat.unit, fill = factor(balance)), 
+              alpha = 0.5, color = NA) +
+  geom_point(data = dfs, 
+             aes(length, y = silver, color = factor(balance)), 
+             alpha = 0.3, size = 0.5) +
+  facet_wrap(~spat.unit) 
+
+dfzl %>%
+  mutate(length = length_sc*sd(df.sweel3$length, na.rm = TRUE) + mean(df.sweel3$length, na.rm = TRUE)) %>%
+  ggplot() +
+  geom_line(aes(x = length, y = p, group = lat_scmean, color = lat_scmean)) +
+  geom_point(data = dfs, aes(length, y = silver, group = lat_scmean, color = lat_scmean), show.legend = FALSE, alpha = 0.3, shape = 124, size = 1.5) +
+  facet_wrap(coast~sb) +
+  scale_color_viridis_c()
+
+```
+
+### logistic p ~ age
+Calculate for basin specific L50.
+
+Solve for z = 0 (i.e. when p = 0.5), which means that we want to get the observed length in the expression for $z$; 
+
+$0 = alpha[su] + b_{0,su} * length_sc + b_{1,su} * age_sc$
+
+Conditioned on mean age (length = 0), this becomes:
+
+$A50_{su} = -alpha[su] / b_{1,su}$
+
+```{r}
+s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su], b1) %>%
+  median_qi()
+
+# using alpha, b0 which is per basin 
+dfza <- s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su], log_b0[su], b1) %>%
+  median_qi() %>%
+  expand_grid(age_sc = seq(min(df.sweel3$age_sc, na.rm = TRUE),max(df.sweel3$age_sc, na.rm = TRUE), by = 0.05)) %>%
+  left_join(df.sweel3 %>% distinct(spat.unit,su)) %>%
+  ungroup() %>%
+  mutate(p_mean = 1 / (1 + exp(-(alpha + exp(log_b0)*0 + b1*age_sc))))
+
+ssu <- sample(df.sweel3$su, 20, replace = FALSE)
+dfza %>%
+  filter(#sex == 0,
+         su %in% ssu) %>%
+  ggplot() +
+  geom_line(aes(x = age_sc, y = p_mean, color = factor(su)), show.legend = FALSE) 
+  #geom_point(data = df.sweel3 %>% filter(su %in% ssu), aes(age_sc, y = silver_dur, color = factor(spat.unit)),show.legend = FALSE, alpha = 0.3) 
+  facet_wrap(~spat.unit) 
+
+dfza %>%
+  filter(sex == 0) %>%
+  ggplot() +
+  geom_line(aes(x = age_sc, y = p_mean, color = factor(su)), show.legend = FALSE)
+```
+
+```{r}
+dfp <- silv.samples %>%
+  spread_draws(s.mu[i]) %>%
+  left_join(data.silv %>% 
+              select(ecoreg,sex,fi_year) %>% 
+              mutate(i = row_number()), 
+            by = "i") %>%
+  group_by(.draw, ecoreg, sex, fi_year) %>%
+  summarise(pred.sl = median(s.mu), .groups = "drop") %>%
+  left_join(var.lats) %>%
+  mutate(ecoreg = fct_reorder(as.factor(ecoreg), m.lat),
+         sex = if_else(sex == 0, "female", "male")) %>%
+  mutate(m_pred = median(pred.sl), .by = c(sex))
+
+n.labs <- data.silv %>%
+  summarise(n = n(), .by = c(ecoreg, sex)) %>%
+  mutate(sex = if_else(sex==1, "female", "male"))
+
+dfp %>% summarise(mexp = exp(median(pred.sl)), .by= sex)
+dfp %>% ungroup() %>% summarise(exp(median(pred.sl)), .by= sex)
+
+dfp %>%
+  ggplot() +
+  geom_boxplot(aes(x = exp(pred.sl), y = ecoreg), outliers = FALSE, show.legend = FALSE) +
+  geom_vline(aes(xintercept = exp(m_pred)), color = "darkgrey", size = 0.5) +
+  facet_wrap(~sex, scales = "free_x") +
+  theme_minimal() +
+  labs(x = "Length at silvering [mm]", y = "ecoregion")
+ggsave(paste0(home, "/report/silv_ERl.png"), width = 17, height = 14, units = "cm")
+
+```
+
+### Length over space
+
+```{r, cache = FALSE}
+# L50 by points
+dfs <- s.samples %>%
+  as_draws() %>%
+  spread_draws(alpha[su], log_b0[su], sep = ",") %>%
+  median_qi() %>%
+  mutate(L50 = -alpha/exp(log_b0)) %>%
+  # gather_draws(alpha[mb], bs[er], bt, sep = ",") %>%
+  left_join(df.sweel3 %>% distinct(spat.unit,su,lat,lon))# %>%
+
+# by catchment
+dfsca <- ca_sf %>%
+  mutate(spat.unit = as.character(main_bas)) %>%
+  #mutate(main_bas = as.factor(main_bas)) %>%
+  left_join(dfs %>% distinct(su,L50,spat.unit)) %>%
+  filter(!is.na(mb)) #%>%
+  mutate(pred.length = exp(.value))
+  
+plot_map_Nord +
+  geom_sf(data = dfs, aes(fill = L50), color = NA,  alpha = 0.5) +
+  scale_fill_viridis_c() +
+  geom_point(data = df.sweel2 %>% drop_na(lat,lon) %>% 
+               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000), #color = , 
+             size = 0.1) 
+  
+# # ungroup() %>%
+#   # mutate(female = alpha + bt*mt,
+#   #        male = alpha + bs + bt*mt,
+#   #        year = yr + 1997) %>%
+#   pivot_longer(cols = c("female","male"), names_to = "sex", values_to = "length") %>%
+#   mutate(length = exp(length)) %>%
+#   mutate(m_length = median(length), .by = c(year,sex)) %>%
+#   left_join(var.lats) %>%
+#   mutate(ecoreg = fct_reorder(ecoreg, -m.lat)) 
+# 
+# dfp %>%
+#   filter(sex == "female") %>%
+#   ggplot() +
+#   geom_boxplot(aes(y = length, x = year, group = year), color = "#F8766D", outliers = FALSE) +
+#   geom_line(aes(y = m_length, x = year), color = "#F8766D", alpha = 0.4) +
+#   facet_wrap(~ecoreg, scales = "free_y") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = rel(.75))) +
+#   labs(x = "year")
+# ggsave(paste0(home, "/report/silv_lf.png"), width = 17, height = 14, units = "cm")
+# 
+# dfp %>%
+#   filter(sex == "male") %>%
+#   ggplot() +
+#   geom_boxplot(aes(y = length, x = year, group = year), color = "#00BFC4", outliers = FALSE) +
+#   geom_line(aes(y = m_length, x = year), color = "#00BFC4", alpha = 0.4) +
+#   facet_wrap(~ecoreg, scales = "free_y") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1, size = rel(.75))) +
+#   labs(x = "year")
+# ggsave(paste0(home, "/report/silv_lm.png"), width = 17, height = 14, units = "cm")  
+
+```
+
+### Length distribution per su
+
+```{r}
+pis <- s.samples %>%
+  as_draws() %>%
+  spread_draws(p[ind.id], length_sc[ind.id], silver[ind.id]) %>%
+  left_join(df.sweel3 %>% select(su,spat.unit,ind.id,sb,balance,sea_basin), by = "ind.id")
+
+p1 <- pis %>%
+  mutate(length = length_sc * sd(df.sweel3$length, na.rm = TRUE) + mean(df.sweel3$length, na.rm = TRUE)) %>%
+  filter(silver == 1,
+         ) %>%
+  ggplot(aes(x = length, y = sb, weight = p, fill = factor(sb))) + 
+  geom_density_ridges()
+
+p2 <- pis %>%
+  mutate(length = length_sc * sd(df.sweel3$length, na.rm = TRUE) + mean(df.sweel3$length, na.rm = TRUE)) %>%
+  filter(silver == 1,
+         ) %>%
+  ggplot(aes(x = length, y = sb, fill = factor(sb))) + 
+  geom_density_ridges()
+
+# Weighting has very little effect on the desnity distribution:
+p1 + p2
+
+# density by balanced sunits and sb 
+p3 <- pis %>%
+  mutate(length = length_sc * sd(df.sweel3$length, na.rm = TRUE) + mean(df.sweel3$length, na.rm = TRUE),
+         sb = if_else(sb == 1, "Westcoast", "Baltic Sea")
+         ) %>%
+  filter(silver == 1,
+         balance == 1
+         ) %>%
+  ggplot(aes(x = length, y = spat.unit, weight = p, fill = factor(sb))) + 
+  geom_density_ridges(alpha = 0.8, color = NA)
+
+p4 <- pis %>%
+  mutate(length = length_sc * sd(df.sweel3$length, na.rm = TRUE) + mean(df.sweel3$length, na.rm = TRUE),
+         sb = if_else(sb == 1, "Westcoast", "Baltic Sea")) %>%
+  filter(silver == 1) %>%
+  ggplot(aes(x = length, y = sb, weight = p, fill = factor(sb))) + 
+  geom_density_ridges(alpha = 0.8, color = NA)
+
+p3 / p4 + plot_layout(ncol = 1, guides = "collect")
+
+plot_map_Nord +
+  geom_point(data = df.sweel3 %>% 
+               filter(su %in% c(6,27)) %>%
+               filter(balance == 1) %>% add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = sea_basin)) +
+  geom_sf(data = ca_sf2, aes(fill = factor(main_catch)),  alpha = 0.3)
+
+# 6, 27,59
+```
+
+### Posterior predictive checks
+```{r}
+# visual classifier
+# compare means by spatial unit
+tmps <- as_draws(s.samples) %>%
+  #subset_draws(variable = c("visual_rep")) %>%
+  spread_draws(visual_rep[ind.id]) %>%
+  median_qi() %>%
+  left_join(df.sweel3 %>% select(su,spat.unit,ind.id), by = "ind.id") 
+
+tmps %>%
+  summarise(mean_est_vis = mean(visual_rep, na.rm = TRUE), .by = spat.unit) %>%
+  left_join(df.sweel3 %>% summarise(obs_vis = mean(silver_vis, na.rm = TRUE), .by = spat.unit), by = "spat.unit")
+
+# plot densities of 0/1 
+tmps %>%
+  ggplot() +
+  geom_density(aes(visual_rep, group = ), color = "red") +
+  geom_density(data = df.sweel3, aes(silver_vis)) +
+  labs(title = "red is model")
+
+# Durif classifier
+tmpd <- as_draws(s.samples) %>%
+  #subset_draws(variable = c("visual_rep")) %>%
+  spread_draws(measured_rep[ind.id]) %>%
+  median_qi() %>%
+  left_join(df.sweel3 %>% select(su,spat.unit,ind.id), by = "ind.id") 
+
+tmpd %>%
+  summarise(mean_est_dur = mean(measured_rep, na.rm = TRUE), .by = spat.unit) %>%
+  left_join(df.sweel3 %>% summarise(obs_dur = mean(silver_dur, na.rm = TRUE), .by = spat.unit), by = "spat.unit")
+
+tmpd %>%
+  ggplot() +
+  geom_density(aes(measured_rep), color = "red") +
+  geom_density(data = df.sweel3, aes(silver_vis)) +
+  labs(title = "red is model")
+  ggplot() +
+  geom_density(aes(measured_rep)) +
+  geom_density(data = df.sweel3, aes(silver_dur))
+
+# Test
+# Disagreement rate between classifiers — the model's ability to reproduce the observed rate of V≠M is a direct check on Se/Sp estimation
+#Prevalence by population — check that simulated stage prevalence matches observed classifier prevalence within each population mb
+#Prevalence along the length gradient — bin individuals by length and compare observed vs simulated classifier rates, which checks the logistic curve f
+```
+
+### The NA stage III:s
+
+```{r}
+tmp3s <- s.samples %>%
+  as_draws() %>%
+  spread_draws(silver[ind.id]) %>%
+  median_qi() %>%
+  left_join(df.sweel3 %>% select(visual_stage,durif_stage,ind.id,su), by = "ind.id") 
+
+tmp %>%
+  filter(durif_stage %in% c("FII","FIII","FIV","FV")) %>%
+  summarise(n = n(), .by = c(silver, durif_stage, visual_stage)) %>%
+  arrange(-silver, -n) %>%
+  rename(estimated = silver)
+
+```
+
+# test distributions
+```{r}
+  mu_a_gl ~ dnorm(msa, sda)
+  sd_a_gl ~ dgamma(shape = 1.5, rate = 1.5 / sda)
+  #mu_b_gl ~ dnorm(log(mb0), sd = log(sdb0))
+  mu_b_gl ~ dnorm(log(mb0), sd = 0.5)
+  #sd_b_gl ~ dgamma(shape = 1.5, rate = 1.5 / sdb0) # to weak 
+  sd_b_gl ~ dgamma(shape = 2, rate = 4 / sdb0) 
+  
+  sd_a_su ~ dgamma(shape = 2, rate = 2cx)   # sd for su-level
+  
+  
+ggplot() +
+stat_function(fun = dgamma, 
+              args = list(shape = 1000, rate = 2000)) +
+  stat_function(fun = dgamma, 
+              args = list(shape = 2, rate = 12), color = "blue") +
+  xlim(0,5)
+```
+
