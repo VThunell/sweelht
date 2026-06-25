@@ -24,7 +24,7 @@ execute:
 ```{r libs}
 #| message: false
 
-pkgs <- c("tidyverse", "devtools","tidylog","stacomiR","stacomirtools",
+pkgs <- c("tidyverse", "devtools","tidylog","stacomiR","stacomirtools","broom",
  "purrr","janitor","patchwork","DBI","odbc","arrow","sf","sdmTMB")
 
 
@@ -137,7 +137,6 @@ kul_ind2 <- kul_ind %>%
   filter(!(is.na(Slutlängd_cm) & is.na(Totalvikt_gram) & is.na(Ålder))) %>%
   rename(length = Slutlängd_mm,
          weight = Totalvikt_gram,
-         #  weight2 = Vikt2,
          age = Ålder,
          sex = Kön,
          visual_stage = Artbestämning,
@@ -146,6 +145,7 @@ kul_ind2 <- kul_ind %>%
   mutate(lon = Bäst_longitud_decimal_grader,
          lat = Bäst_latitud_decimal_grader,
          db = "kul")
+
 ```
 <!-- Error in `dbConnect()`: -->
 <!-- ! ODBC failed with error 00000 from [unixODBC][Driver Manager]. -->
@@ -154,7 +154,7 @@ kul_ind2 <- kul_ind %>%
 <!-- Run `rlang::last_trace()` to see where the error occurred. -->
 
 
-## Join data
+## Join data and fix errors
 ```{r}
 # can there be dupes between the dbs?
 # dupes <- c(kul_ind2$Ind_id,sb_ind2$IndividID)[duplicated(c(kul_ind2$Ind_id,sb_ind2$IndividID))]
@@ -170,15 +170,37 @@ df <- sb_ind2 %>%
             select(all_of(cols), Lokal)) %>%
   mutate(sex = ifelse(sex %in% c("f","Hona"), "female", 
                       if_else( sex %in% c("m","Hane"), "male", NA)),
-         ind_id = row_number())
+         ind_id = row_number()) %>%
+  # set one weight == 0 to NA
+  mutate(weight = if_else(weight == 0, NA, weight))
 
+# id. weird lookign data based on le cren 
+ab <- df %>%
+  drop_na(weight,length) %>%
+  lm(data = ., log(weight) ~ log(length)) %>%
+  tidy() 
+
+lc <- df %>%
+  drop_na(weight,length) %>%
+  filter(!weight == 0) %>%
+  mutate(a = ab$estimate[1], b = ab$estimate[2]) %>%
+  mutate(lecren = exp(a + b*log(length))/weight) %>%
+  mutate(outlie = if_else(
+    lecren < quantile(lecren, 0.00025) | lecren > quantile(lecren, 0.99975),1,0))
+
+lc %>%
+  ggplot() + 
+  geom_point(aes(length,weight, color = outlie))
+
+df2 <- lc %>%
+  filter(!outlie == 1)
 ```
 
 ## Retrieve spatial info
 
 ```{r}
 # make data spatial object
-df_sf <- st_as_sf(df %>% drop_na(lat,lon), coords = c("lon", "lat"), crs = 4326,  remove = FALSE)
+df_sf <- st_as_sf(df2 %>% drop_na(lat,lon), coords = c("lon", "lat"), crs = 4326,  remove = FALSE)
 
 re <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/refeel/", format = "parquet")
 ca <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/catchments/", format = "parquet")
@@ -273,7 +295,7 @@ plot_map_Nord +
   labs(caption = "color is spatial unit")
 
 plot_map_Nord +
-  geom_point(data = df_all2z %>%
+  geom_point(data = df_all2 %>%
                add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633) %>%filter( spat.unit == "Östersjön (hela) ICES SD 22-32"), aes(X*1000, Y*1000, color = sea_basin), size = 0.1) +
   guides(color = guide_legend(title.position = "top"))
 
