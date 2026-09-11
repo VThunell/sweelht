@@ -164,7 +164,7 @@ kul_ind2 <- kul_ind %>%
 # join the sb and kul data
 cols <- c("length","weight","age","lat","lon","sex","visual_stage","durif_stage","db","year")
 df <- sb_ind2 %>% 
-  select(all_of(cols), VattenNamn) %>% 
+  select(all_of(cols), VattenNamn,diameter_eye,length_pectoral) %>% 
   bind_rows(kul_ind2 %>% 
             mutate(durif_stage = NA) %>%
             select(all_of(cols), Lokal)) %>%
@@ -191,21 +191,71 @@ lc <- df %>%
 lc %>%
   ggplot() + 
   geom_point(aes(length,weight, color = outlie))
+```
 
-df2 <- lc %>%
-  filter(!outlie == 1)
+# Correlations
+
+```{r}
+abw <- df %>%
+  drop_na(weight,length) %>%
+  lm(data = ., log(weight) ~ log(length)) %>%
+  tidy() 
+
+abe <- df %>%
+  drop_na(diameter_eye,length) %>%
+  lm(data = ., log(diameter_eye) ~ log(length)) %>%
+  tidy() 
+
+abp <- df %>%
+  drop_na(length_pectoral,length) %>%
+  lm(data = ., log(length_pectoral) ~ log(length)) %>%
+  tidy() 
+
+pc <- df %>%
+  drop_na(length_pectoral,diameter_eye) %>%
+  filter(!weight == 0) %>%
+  mutate(aw = abw$estimate[1], bw = abw$estimate[2]) %>%
+  mutate(lecren = exp(aw + bw*log(length))/weight) %>%
+  mutate(ap = abp$estimate[1], bp = abp$estimate[2]) %>%
+  mutate(pecren = exp(ap + bp*log(length))/length_pectoral) %>%
+  mutate(ae = abe$estimate[1], be = abe$estimate[2]) %>%
+  mutate(eecren = exp(ae + be*log(length))/diameter_eye)
+  
+pc %>%
+  ggplot() + 
+  geom_point(aes(length,lecren)) +
+
+pc %>%
+  ggplot() + 
+  geom_point(aes(length,pecren))
+
+pc %>%
+  select(length, age, weight, lecren, pecren, eecren) %>%
+  drop_na(length, age, weight, lecren, pecren, eecren) %>%
+  ggpairs(
+  lower = list(continuous = wrap("smooth", alpha = 0.3, color = "blue")), # Scatter plots with trendline
+  diag = list(continuous = wrap("densityDiag", fill = "gray")),           # Density plots on diagonal
+  upper = list(continuous = wrap("cor", size = 4),progress = FALSE)
+) 
+
 ```
 
 ## Retrieve spatial info
 
 ```{r}
 # make data spatial object
-df_sf <- st_as_sf(df2 %>% drop_na(lat,lon), coords = c("lon", "lat"), crs = 4326,  remove = FALSE)
+df_sf <- st_as_sf(df %>% drop_na(lat,lon), coords = c("lon", "lat"), crs = 4326,  remove = FALSE)
 
 re <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/refeel/", format = "parquet")
 ca <- open_dataset("/Users/vitl0001/Documents/Projects/DIASPARA/Habitat_db/catchments/", format = "parquet")
 
 # coastal polygon and sea basin (Norra/Södra Östersjön, Bottenviken, Västerhavet). From https://www.dataportal.se/datasets/78_7502.
+read_sf("/Users/vitl0001/Documents/Projects/SWEel-lhts/Havsomraden_2016/Havsomraden_2016.shp") %>%
+  st_transform(my_shp, crs = 4326) %>%
+  group_by(TYP_NFS06) %>%
+  ggplot() +
+  geom_sf(aes(color = TYP_NFS06))
+
 ba_sf <- read_sf("/Users/vitl0001/Documents/Projects/SWEel-lhts/Havsomraden_2016/Havsomraden_2016.shp") %>%
   st_transform(my_shp, crs = 4326) %>%
   group_by(COMP_AUTH) %>%
@@ -289,15 +339,23 @@ df_all2 <- df_all %>%
 ## Data points in spatial units, catchments and basins
 ```{r}
 plot_map_Nord +
-  geom_sf(data = ca_sf %>% filter(main_catch %in% df_cobaca_inland$main_catch), aes(fill = factor(main_catch)), color = NA,  alpha = 0.3)  +
-  geom_point(data = df_all2 %>%
-               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = factor(spat.unit)), show.legend = FALSE, size = 0.1, ) +
+  geom_sf(data = ca_sf %>% filter(main_catch %in% df_cobaca_inland$main_catch), aes(fill = factor(main_catch)), color = NA,  alpha = 0.3) +
+  geom_point(data = df_all2 %>% 
+  #filter(is.na(spat.unit)) %>%
+               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = factor(spat.unit)) , show.legend = FALSE, size = 0.1, ) +
   labs(caption = "color is spatial unit")
 
 plot_map_Nord +
+  #geom_sf(data = ca_sf %>% filter(main_catch %in% df_cobaca_inland$main_catch), aes(fill = factor(main_catch)), color = NA,  alpha = 0.3)  +
   geom_point(data = df_all2 %>%
-               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633) %>%filter( spat.unit == "Östersjön (hela) ICES SD 22-32"), aes(X*1000, Y*1000, color = sea_basin), size = 0.1) +
-  guides(color = guide_legend(title.position = "top"))
+               mutate(Habitat = if_else(marine == "no", "Inland", "Marine")) %>%
+               #filter(spat.unit == "Ö Sydkustens kustvatten" | is.na(spat.unit)) %>%
+               add_utm_columns(ll_names = c("lon", "lat"), utm_crs = 32633), aes(X*1000, Y*1000, color = Habitat), size = 0.1) +
+  guides(color = guide_legend(title.position = "top")) +
+  labs(color = "") +
+  theme(legend.position = "inside", legend.position.inside = c(0.18, 0.80))
+
+ggsave(paste0(home, "/figures/map_data.pdf"), width = 18, height = 13, units = "cm")
 
 ```
 
